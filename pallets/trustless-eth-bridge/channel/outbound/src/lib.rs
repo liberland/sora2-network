@@ -6,14 +6,13 @@ use bridge_types::{H160, H256, U256};
 use codec::{Decode, Encode};
 use ethabi::{self, Token};
 use frame_support::ensure;
-use frame_support::traits::Get;
+use frame_support::traits::{Currency, Get};
 use frame_support::weights::Weight;
 use sp_core::RuntimeDebug;
 use sp_io::offchain_index;
 use sp_runtime::traits::Hash;
 use sp_std::prelude::*;
 use sp_std::vec;
-use traits::MultiCurrency;
 
 use bridge_types::types::MessageNonce;
 use bridge_types::EVMChainId;
@@ -36,8 +35,6 @@ pub struct Message {
     pub target: H160,
     /// A nonce for replay protection and ordering.
     pub nonce: u64,
-    /// Fee for accepting message on this channel.
-    pub fee: U256,
     /// Maximum gas this message can use on the Ethereum.
     pub max_gas: U256,
     /// Payload for target application.
@@ -55,9 +52,6 @@ pub struct Commitment {
     pub messages: Vec<Message>,
 }
 
-type BalanceOf<T> = <<T as assets::Config>::Currency as MultiCurrency<
-    <T as frame_system::Config>::AccountId,
->>::Balance;
 
 pub use pallet::*;
 
@@ -65,12 +59,10 @@ pub use pallet::*;
 pub mod pallet {
     use super::*;
     use bridge_types::traits::AuxiliaryDigestHandler;
-    use bridge_types::traits::MessageStatusNotifier;
     use bridge_types::traits::OutboundChannel;
     use bridge_types::types::AdditionalEVMOutboundData;
     use bridge_types::types::AuxiliaryDigestItem;
     use bridge_types::types::MessageId;
-    use bridge_types::types::MessageStatus;
     use bridge_types::GenericNetworkId;
     use frame_support::log::debug;
     use frame_support::pallet_prelude::*;
@@ -79,7 +71,7 @@ pub mod pallet {
     use frame_system::RawOrigin;
 
     #[pallet::config]
-    pub trait Config: frame_system::Config + assets::Config + technical::Config {
+    pub trait Config: frame_system::Config {
         type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 
         /// Prefix for offchain storage keys.
@@ -96,17 +88,9 @@ pub mod pallet {
         /// Maximum gas limit for one message batch sent to Ethereum.
         type MaxTotalGasLimit: Get<u64>;
 
-        type FeeCurrency: Get<Self::AssetId>;
-
-        type FeeTechAccountId: Get<Self::TechAccountId>;
-
         type AuxiliaryDigestHandler: AuxiliaryDigestHandler;
 
-        type MessageStatusNotifier: MessageStatusNotifier<
-            Self::AssetId,
-            Self::AccountId,
-            BalanceOf<Self>,
-        >;
+        type Currency: Currency<Self::AccountId>;
 
         /// Weight information for extrinsics in this pallet
         type WeightInfo: WeightInfo;
@@ -151,16 +135,6 @@ pub mod pallet {
 
     #[pallet::storage]
     pub type ChannelNonces<T: Config> = StorageMap<_, Identity, EVMChainId, u64, ValueQuery>;
-
-    #[pallet::storage]
-    #[pallet::getter(fn fee)]
-    pub type Fee<T: Config> = StorageValue<_, BalanceOf<T>, ValueQuery, DefaultFee<T>>;
-
-    #[pallet::type_value]
-    pub fn DefaultFee<T: Config>() -> BalanceOf<T> {
-        // TODO: Select fee value
-        10000
-    }
 
     /// The current storage version.
     const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
@@ -213,23 +187,12 @@ pub mod pallet {
         QueueSizeLimitReached,
         /// Maximum gas for queued batch exceeds limit.
         MaxGasTooBig,
-        /// Cannot pay the fee to submit a message.
-        NoFunds,
         /// Cannot increment nonce
         Overflow,
         /// This channel already exists
         ChannelExists,
     }
 
-    #[pallet::call]
-    impl<T: Config> Pallet<T> {
-        #[pallet::weight(<T as Config>::WeightInfo::set_fee())]
-        pub fn set_fee(origin: OriginFor<T>, amount: BalanceOf<T>) -> DispatchResultWithPostInfo {
-            ensure_root(origin)?;
-            Fee::<T>::set(amount);
-            Ok(().into())
-        }
-    }
     impl<T: Config> Pallet<T> {
         pub fn make_message_id(nonce: u64) -> H256 {
             MessageId::outbound(nonce).using_encoded(|v| <T as Config>::Hashing::hash(v))
@@ -240,15 +203,6 @@ pub mod pallet {
             let (messages, total_max_gas) = take_message_queue::<T>(network_id);
             if messages.is_empty() {
                 return <T as Config>::WeightInfo::on_initialize_no_messages();
-            }
-
-            for message in messages.iter() {
-                T::MessageStatusNotifier::update_status(
-                    GenericNetworkId::EVM(network_id),
-                    Self::make_message_id(message.nonce),
-                    MessageStatus::Committed,
-                    None,
-                );
             }
 
             let commitment = Commitment {
@@ -282,7 +236,6 @@ pub mod pallet {
                     Token::Tuple(vec![
                         Token::Address(message.target),
                         Token::Uint(message.nonce.into()),
-                        Token::Uint(message.fee.into()),
                         Token::Uint(message.max_gas.into()),
                         Token::Bytes(message.payload.clone()),
                     ])
@@ -312,7 +265,6 @@ pub mod pallet {
 
     #[pallet::genesis_config]
     pub struct GenesisConfig<T: Config> {
-        pub fee: BalanceOf<T>,
         pub interval: T::BlockNumber,
     }
 
@@ -320,7 +272,6 @@ pub mod pallet {
     impl<T: Config> Default for GenesisConfig<T> {
         fn default() -> Self {
             Self {
-                fee: Default::default(),
                 interval: 10u32.into(),
             }
         }
@@ -329,7 +280,6 @@ pub mod pallet {
     #[pallet::genesis_build]
     impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
         fn build(&self) {
-            Fee::<T>::set(self.fee.clone());
             Interval::<T>::set(self.interval.clone());
         }
     }
@@ -366,28 +316,12 @@ pub mod pallet {
                     return Err(Error::<T>::Overflow.into());
                 }
 
-                // Attempt to charge a fee for message submission
-                let fee = match who {
-                    RawOrigin::Signed(who) => {
-                        let fee = Self::fee();
-                        technical::Pallet::<T>::transfer_in(
-                            &T::FeeCurrency::get(),
-                            who,
-                            &T::FeeTechAccountId::get(),
-                            fee,
-                        )?;
-                        fee
-                    }
-                    _ => 0u128.into(),
-                };
-
                 append_message_queue::<T>(
                     network_id,
                     Message {
                         network_id: network_id,
                         target,
                         nonce: *nonce,
-                        fee: fee.into(),
                         max_gas,
                         payload: payload.to_vec(),
                     },

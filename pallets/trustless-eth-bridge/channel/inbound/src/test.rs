@@ -233,21 +233,11 @@ parameter_types! {
     };
 }
 
-pub struct FeeConverter<T: Config>(PhantomData<T>);
-
-impl<T: Config> Convert<U256, BalanceOf<T>> for FeeConverter<T> {
-    fn convert(_: U256) -> BalanceOf<T> {
-        100u32.into()
-    }
-}
-
 impl bridge_inbound_channel::Config for Test {
     type RuntimeEvent = RuntimeEvent;
     type Verifier = MockVerifier;
     type MessageDispatch = MockMessageDispatch;
     type Hashing = Keccak256;
-    type MessageStatusNotifier = ();
-    type FeeConverter = FeeConverter<Self>;
     type FeeAssetId = ();
     type OutboundChannel = MockOutboundChannel<Self::AccountId>;
     type FeeTechAccountId = GetTrustlessBridgeFeesTechAccountId;

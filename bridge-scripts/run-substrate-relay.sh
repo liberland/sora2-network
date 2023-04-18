@@ -5,4 +5,5 @@ cargo run --release --bin relayer -- \
     --ethereum-key $1 \
     --ethereum-url ws://localhost:8546 \
     --substrate-url ws://localhost:9944 \
+    --gas-metrics-path gas.log \
     bridge relay substrate

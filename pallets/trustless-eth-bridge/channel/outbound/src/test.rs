@@ -192,7 +192,6 @@ impl bridge_outbound_channel::Config for Test {
     type MaxTotalGasLimit = MaxTotalGasLimit;
     type FeeCurrency = ();
     type FeeTechAccountId = GetTrustlessBridgeFeesTechAccountId;
-    type MessageStatusNotifier = ();
     type AuxiliaryDigestHandler = ();
     type WeightInfo = ();
 }

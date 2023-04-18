@@ -1,12 +1,12 @@
 //! Ethereum event logs decoders.
 
-use super::{BalanceOf, Config};
+use super::Config;
+use frame_support::pallet_prelude::PhantomData;
 use bridge_types::log::Log;
 use bridge_types::H160;
 use ethabi::{Event, EventParam, ParamType};
 use once_cell::race::OnceBox;
 use sp_core::RuntimeDebug;
-use sp_runtime::traits::Convert;
 use sp_std::convert::TryFrom;
 use sp_std::prelude::*;
 
@@ -58,10 +58,9 @@ where
     pub source: H160,
     /// A nonce for enforcing replay protection and ordering.
     pub nonce: u64,
-    /// Fee paid by user for relaying the message
-    pub fee: BalanceOf<T>,
     /// The inner payload generated from the source application.
     pub payload: Vec<u8>,
+    _phantom: PhantomData<T>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, RuntimeDebug)]
@@ -79,23 +78,21 @@ impl<T: Config> TryFrom<Log> for Envelope<T> {
         let mut source = None;
         let mut nonce = None;
         let mut payload = None;
-        let mut fee = None;
         for param in log.params {
             match param.name.as_str() {
                 "source" => source = param.value.into_address(),
                 "nonce" => nonce = param.value.into_uint().map(|x| x.low_u64()),
                 "payload" => payload = param.value.into_bytes(),
-                "fee" => fee = param.value.into_uint().map(|x| T::FeeConverter::convert(x)),
                 _ => return Err(EnvelopeDecodeError),
             }
         }
 
         Ok(Self {
             channel: address,
-            fee: fee.ok_or(EnvelopeDecodeError)?,
             source: source.ok_or(EnvelopeDecodeError)?,
             nonce: nonce.ok_or(EnvelopeDecodeError)?,
             payload: payload.ok_or(EnvelopeDecodeError)?,
+            _phantom: Default::default(),
         })
     }
 }
