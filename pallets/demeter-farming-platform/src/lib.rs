@@ -79,7 +79,7 @@ pub use pallet::*;
 #[frame_support::pallet]
 pub mod pallet {
     use crate::{migrations, PoolData, StorageVersion, TokenInfo, UserInfo, WeightInfo};
-    use common::prelude::{Balance, FixedWrapper};
+    use common::prelude::{AssetInfoProvider, Balance, FixedWrapper};
     use common::{balance, PoolXykPallet};
     use frame_support::pallet_prelude::*;
     use frame_support::transactional;
@@ -92,6 +92,7 @@ pub mod pallet {
 
     const PALLET_ID: PalletId = PalletId(*b"deofarms");
 
+    // TODO: #395 use AssetInfoProvider instead of assets pallet
     #[pallet::config]
     pub trait Config:
         frame_system::Config + assets::Config + technical::Config + ceres_liquidity_locker::Config
@@ -295,6 +296,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Register token for farming
+        #[pallet::call_index(0)]
         #[pallet::weight(<T as Config>::WeightInfo::register_token())]
         pub fn register_token(
             origin: OriginFor<T>,
@@ -346,6 +348,7 @@ pub mod pallet {
         }
 
         /// Add pool
+        #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::add_pool())]
         pub fn add_pool(
             origin: OriginFor<T>,
@@ -421,6 +424,7 @@ pub mod pallet {
         /// Deposit to pool
 
         #[transactional]
+        #[pallet::call_index(2)]
         #[pallet::weight(<T as Config>::WeightInfo::deposit())]
         pub fn deposit(
             origin: OriginFor<T>,
@@ -595,6 +599,7 @@ pub mod pallet {
         /// Get rewards
 
         #[transactional]
+        #[pallet::call_index(3)]
         #[pallet::weight(<T as Config>::WeightInfo::get_rewards())]
         pub fn get_rewards(
             origin: OriginFor<T>,
@@ -674,6 +679,7 @@ pub mod pallet {
         /// Withdraw
 
         #[transactional]
+        #[pallet::call_index(4)]
         #[pallet::weight(<T as Config>::WeightInfo::withdraw())]
         pub fn withdraw(
             origin: OriginFor<T>,
@@ -738,6 +744,7 @@ pub mod pallet {
         }
 
         /// Remove pool
+        #[pallet::call_index(5)]
         #[pallet::weight(<T as Config>::WeightInfo::remove_pool())]
         pub fn remove_pool(
             origin: OriginFor<T>,
@@ -776,6 +783,7 @@ pub mod pallet {
         }
 
         /// Change pool multiplier
+        #[pallet::call_index(6)]
         #[pallet::weight(<T as Config>::WeightInfo::change_pool_multiplier())]
         pub fn change_pool_multiplier(
             origin: OriginFor<T>,
@@ -840,6 +848,7 @@ pub mod pallet {
         }
 
         /// Change total tokens
+        #[pallet::call_index(7)]
         #[pallet::weight(<T as Config>::WeightInfo::change_total_tokens())]
         pub fn change_total_tokens(
             origin: OriginFor<T>,
@@ -887,6 +896,7 @@ pub mod pallet {
         }
 
         /// Change info
+        #[pallet::call_index(8)]
         #[pallet::weight(<T as Config>::WeightInfo::change_info())]
         pub fn change_info(
             origin: OriginFor<T>,
@@ -932,6 +942,7 @@ pub mod pallet {
         }
 
         /// Change pool deposit fee
+        #[pallet::call_index(9)]
         #[pallet::weight(<T as Config>::WeightInfo::change_pool_deposit_fee())]
         pub fn change_pool_deposit_fee(
             origin: OriginFor<T>,
@@ -981,6 +992,7 @@ pub mod pallet {
         }
 
         /// Change token info
+        #[pallet::call_index(10)]
         #[pallet::weight(<T as Config>::WeightInfo::change_token_info())]
         pub fn change_token_info(
             origin: OriginFor<T>,

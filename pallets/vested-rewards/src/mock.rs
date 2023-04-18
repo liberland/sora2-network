@@ -134,7 +134,7 @@ impl LiquidityProxyTrait<DEXId, AccountId, AssetId> for MockLiquidityProxy {
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
-    pub const MaximumBlockWeight: Weight = Weight::from_ref_time(1024);
+    pub const MaximumBlockWeight: Weight = Weight::from_parts(1024, 0);
     pub const MaximumBlockLength: u32 = 2 * 1024;
     pub const AvailableBlockRatio: Perbill = Perbill::from_percent(75);
     pub GetIncentiveAssetId: AssetId = common::PSWAP.into();
@@ -148,6 +148,7 @@ parameter_types! {
     pub GetCrowdloanRewardsAccountId: AccountId = AccountId32::from([156; 32]);
     pub GetXykFee: Fixed = fixed!(0.003);
     pub const MinimumPeriod: u64 = 5;
+    pub const CrowdloanVestingPeriod: u64 = 14400;
 }
 
 impl frame_system::Config for Runtime {
@@ -178,11 +179,11 @@ impl frame_system::Config for Runtime {
 }
 
 impl Config for Runtime {
+    const BLOCKS_PER_DAY: BlockNumber = 14400;
     type RuntimeEvent = RuntimeEvent;
     type GetBondingCurveRewardsAccountId = GetBondingCurveRewardsAccountId;
     type GetMarketMakerRewardsAccountId = GetMarketMakerRewardsAccountId;
     type GetFarmingRewardsAccountId = GetFarmingRewardsAccountId;
-    type GetCrowdloanRewardsAccountId = GetCrowdloanRewardsAccountId;
     type WeightInfo = ();
 }
 
@@ -193,15 +194,10 @@ impl tokens::Config for Runtime {
     type CurrencyId = <Runtime as assets::Config>::AssetId;
     type WeightInfo = ();
     type ExistentialDeposits = ExistentialDeposits;
-    type OnDust = ();
-    type OnSlash = ();
-    type OnDeposit = ();
-    type OnTransfer = ();
+    type CurrencyHooks = ();
     type MaxLocks = ();
     type MaxReserves = ();
     type ReserveIdentifier = ();
-    type OnNewTokenAccount = ();
-    type OnKilledTokenAccount = ();
     type DustRemovalWhitelist = Everything;
 }
 
@@ -231,6 +227,7 @@ parameter_types! {
             "0000000000000000000000000000000000000000000000000000000000000023"
     ));
     pub const GetBuyBackDexId: DEXId = 0;
+    pub GetTBCBuyBackXSTPercent: Fixed = fixed!(0.025);
 }
 
 impl assets::Config for Runtime {
@@ -270,6 +267,7 @@ impl pswap_distribution::Config for Runtime {
     const PSWAP_BURN_PERCENT: Percent = Percent::from_percent(3);
     type RuntimeEvent = RuntimeEvent;
     type GetIncentiveAssetId = GetIncentiveAssetId;
+    type GetXSTAssetId = GetBuyBackAssetId;
     type LiquidityProxy = MockLiquidityProxy;
     type CompatBalance = Balance;
     type GetDefaultSubscriptionFrequency = GetDefaultSubscriptionFrequency;
@@ -280,6 +278,7 @@ impl pswap_distribution::Config for Runtime {
     type WeightInfo = ();
     type PoolXykPallet = pool_xyk::Pallet<Runtime>;
     type GetParliamentAccountId = GetParliamentAccountId;
+    type BuyBackHandler = ();
 }
 
 impl demeter_farming_platform::Config for Runtime {
@@ -312,6 +311,8 @@ impl multicollateral_bonding_curve_pool::Config for Runtime {
     type EnsureDEXManager = dex_manager::Pallet<Runtime>;
     type VestedRewardsPallet = VestedRewards;
     type PriceToolsPallet = ();
+    type BuyBackHandler = ();
+    type BuyBackXSTPercent = GetTBCBuyBackXSTPercent;
     type WeightInfo = ();
 }
 
@@ -446,6 +447,7 @@ impl Default for ExtBuilder {
 
 impl ExtBuilder {
     pub fn build(self) -> sp_io::TestExternalities {
+        common::test_utils::init_logger();
         let mut t = frame_system::GenesisConfig::default()
             .build_storage::<Runtime>()
             .unwrap();

@@ -45,8 +45,8 @@ pub use pallet::*;
 #[frame_support::pallet]
 pub mod pallet {
     use crate::{migrations, StorageVersion, TokenLockInfo, WeightInfo};
-    use common::balance;
     use common::prelude::{Balance, FixedWrapper};
+    use common::{balance, AssetInfoProvider};
     use frame_support::pallet_prelude::*;
     use frame_support::PalletId;
     use frame_system::ensure_signed;
@@ -58,6 +58,7 @@ pub mod pallet {
 
     const PALLET_ID: PalletId = PalletId(*b"crstlock");
 
+    // TODO: #395 use AssetInfoProvider instead of assets pallet
     #[pallet::config]
     pub trait Config:
         frame_system::Config + assets::Config + technical::Config + timestamp::Config
@@ -167,6 +168,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Lock tokens
+        #[pallet::call_index(0)]
         #[pallet::weight(<T as Config>::WeightInfo::lock_tokens())]
         pub fn lock_tokens(
             origin: OriginFor<T>,
@@ -220,6 +222,7 @@ pub mod pallet {
         }
 
         /// Withdraw tokens
+        #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::withdraw_tokens())]
         pub fn withdraw_tokens(
             origin: OriginFor<T>,
@@ -272,6 +275,7 @@ pub mod pallet {
         }
 
         /// Change fee
+        #[pallet::call_index(2)]
         #[pallet::weight(<T as Config>::WeightInfo::change_fee())]
         pub fn change_fee(origin: OriginFor<T>, new_fee: Balance) -> DispatchResultWithPostInfo {
             let user = ensure_signed(origin)?;

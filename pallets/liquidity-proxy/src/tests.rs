@@ -29,25 +29,19 @@
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use crate::mock::*;
-use crate::{BatchReceiverInfo, Error, QuoteInfo, SwapBatchInfo};
+use crate::test_utils::calculate_swap_batch_input_amount_with_adar_commission;
+use crate::{test_utils, BatchReceiverInfo, Error, QuoteInfo, SwapBatchInfo};
 use common::prelude::fixnum::ops::CheckedSub;
 use common::prelude::{AssetName, AssetSymbol, Balance, QuoteAmount, SwapAmount};
 use common::{
-    assert_approx_eq, balance, fixed, fixed_wrapper, FilterMode, Fixed, LiquidityProxyTrait,
-    LiquiditySourceFilter, LiquiditySourceId, LiquiditySourceType, RewardReason, DAI, DOT, ETH,
-    KSM, PSWAP, USDT, VAL, XOR, XST, XSTUSD,
+    assert_approx_eq, balance, fixed, fixed_wrapper, AssetInfoProvider, BuyBackHandler, FilterMode,
+    Fixed, LiquidityProxyTrait, LiquiditySourceFilter, LiquiditySourceId, LiquiditySourceType,
+    RewardReason, DAI, DOT, ETH, KSM, PSWAP, USDT, VAL, XOR, XST, XSTUSD,
 };
 use core::convert::TryInto;
 use frame_support::{assert_noop, assert_ok};
 use sp_runtime::DispatchError;
-
-#[inline]
-fn mcbc_excluding_filter(dex: DEXId) -> LiquiditySourceFilter<DEXId, LiquiditySourceType> {
-    LiquiditySourceFilter::with_forbidden(
-        dex,
-        [LiquiditySourceType::MulticollateralBondingCurvePool].into(),
-    )
-}
+use test_utils::mcbc_excluding_filter;
 
 #[test]
 #[ignore] // dependency on sampling which is removed
@@ -55,7 +49,7 @@ fn test_quote_exact_input_base_should_pass() {
     let mut ext = ExtBuilder::default().build();
     ext.execute_with(|| {
         let amount: Balance = balance!(500);
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -114,7 +108,7 @@ fn test_quote_exact_input_target_should_pass() {
     let mut ext = ExtBuilder::default().build();
     let amount = balance!(500);
     ext.execute_with(|| {
-        let (quotes, rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &DOT,
             &GetBaseAssetId::get(),
@@ -173,7 +167,7 @@ fn test_quote_exact_output_target_should_pass() {
     let mut ext = ExtBuilder::default().build();
     ext.execute_with(|| {
         let amount: Balance = balance!(250);
-        let (quotes, rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -243,7 +237,7 @@ fn test_quote_exact_output_base_should_pass() {
     let mut ext = ExtBuilder::default().build();
     ext.execute_with(|| {
         let amount = balance!(250);
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &DOT,
             &GetBaseAssetId::get(),
@@ -322,7 +316,8 @@ fn test_poly_quote_exact_input_1_should_pass() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
 
         let ls_quote = <LiquidityProxy as LiquidityProxyTrait<DEXId, AccountId, AssetId>>::quote(
             DEX_A_ID,
@@ -370,7 +365,8 @@ fn test_poly_quote_exact_output_1_should_pass() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
 
         let ls_quote = <LiquidityProxy as LiquidityProxyTrait<DEXId, AccountId, AssetId>>::quote(
             DEX_A_ID,
@@ -418,7 +414,8 @@ fn test_poly_quote_exact_input_2_should_pass() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
 
         let ls_quote = <LiquidityProxy as LiquidityProxyTrait<DEXId, AccountId, AssetId>>::quote(
             DEX_A_ID,
@@ -466,7 +463,8 @@ fn test_poly_quote_exact_output_2_should_pass() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
 
         let ls_quote = <LiquidityProxy as LiquidityProxyTrait<DEXId, AccountId, AssetId>>::quote(
             DEX_A_ID,
@@ -505,7 +503,7 @@ fn test_sell_token_for_base_should_pass() {
     ext.execute_with(|| {
         let alice = alice();
         let filter = mcbc_excluding_filter(DEX_C_ID);
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -526,7 +524,7 @@ fn test_sell_base_for_token_should_pass() {
     ext.execute_with(|| {
         let alice = alice();
         let filter = mcbc_excluding_filter(DEX_C_ID);
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -596,7 +594,7 @@ fn test_buy_base_with_allowed_should_pass() {
             ]
             .into(),
         );
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -638,7 +636,7 @@ fn test_buy_base_with_forbidden_should_pass() {
             ]
             .into(),
         );
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -732,7 +730,7 @@ fn test_sell_however_big_amount_base_should_pass() {
     let mut ext = ExtBuilder::default().build();
     ext.execute_with(|| {
         let alice = alice();
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -744,7 +742,7 @@ fn test_sell_however_big_amount_base_should_pass() {
         .expect("Failed to swap assets");
         assert!(outcome.amount > 0 && outcome.amount < balance!(180));
 
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -756,7 +754,7 @@ fn test_sell_however_big_amount_base_should_pass() {
         .expect("Failed to swap assets");
         assert!(outcome.amount > 0 && outcome.amount < balance!(180));
 
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -768,7 +766,7 @@ fn test_sell_however_big_amount_base_should_pass() {
         .expect("Failed to swap assets");
         assert!(outcome.amount > 0 && outcome.amount < balance!(180));
 
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -780,7 +778,7 @@ fn test_sell_however_big_amount_base_should_pass() {
         .expect("Failed to swap assets");
         assert!(outcome.amount > 0 && outcome.amount < balance!(180));
 
-        let (outcome, _) = LiquidityProxy::exchange_single(
+        let (outcome, _, _) = LiquidityProxy::exchange_single(
             &alice,
             &alice,
             &GetBaseAssetId::get(),
@@ -907,7 +905,8 @@ fn test_fee_when_exchange_on_one_source_of_many_should_pass() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_eq!(quotes.fee, balance!(0.630925033164008153));
     });
 }
@@ -918,7 +917,7 @@ fn test_quote_single_source_should_pass() {
     ext.execute_with(|| {
         MockMCBCPool::init(get_mcbc_reserves_normal()).unwrap();
         let amount = balance!(500);
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -970,7 +969,7 @@ fn test_quote_fast_split_exact_input_base_should_pass() {
         );
 
         // Buying VAL for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &VAL,
@@ -997,7 +996,7 @@ fn test_quote_fast_split_exact_input_base_should_pass() {
         );
 
         // Buying KSM for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &KSM,
@@ -1031,7 +1030,7 @@ fn test_quote_fast_split_exact_input_base_should_pass() {
         );
 
         // Buying DOT for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -1081,7 +1080,7 @@ fn test_quote_fast_split_exact_output_target_should_pass() {
         );
 
         // Buying VAL for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &VAL,
@@ -1108,7 +1107,7 @@ fn test_quote_fast_split_exact_output_target_should_pass() {
         );
 
         // Buying KSM for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &KSM,
@@ -1142,7 +1141,7 @@ fn test_quote_fast_split_exact_output_target_should_pass() {
         );
 
         // Buying DOT for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -1183,7 +1182,7 @@ fn test_quote_fast_split_exact_output_base_should_pass() {
         );
 
         // Buying XOR for VAL
-        let (quotes, rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &VAL,
             &GetBaseAssetId::get(),
@@ -1225,7 +1224,7 @@ fn test_quote_fast_split_exact_output_base_should_pass() {
         );
 
         // Buying XOR for KSM
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &KSM,
             &GetBaseAssetId::get(),
@@ -1259,7 +1258,7 @@ fn test_quote_fast_split_exact_output_base_should_pass() {
         );
 
         // Buying XOR for DOT
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &DOT,
             &GetBaseAssetId::get(),
@@ -1309,7 +1308,7 @@ fn test_quote_fast_split_exact_input_target_should_pass() {
         );
 
         // Buying XOR for VAL
-        let (quotes, rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &VAL,
             &GetBaseAssetId::get(),
@@ -1351,7 +1350,7 @@ fn test_quote_fast_split_exact_input_target_should_pass() {
         );
 
         // Buying XOR for KSM
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &KSM,
             &GetBaseAssetId::get(),
@@ -1385,7 +1384,7 @@ fn test_quote_fast_split_exact_input_target_should_pass() {
         );
 
         // Buying XOR for DOT
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &DOT,
             &GetBaseAssetId::get(),
@@ -1441,7 +1440,7 @@ fn test_quote_fast_split_exact_output_target_undercollateralized_should_pass() {
         // - the default requested VAL (after split at the price equillibrium): ~13,755
         // As a result, the price at TBC becomes too high so that the "Smart" algo is dropped
         // so that the entire amount ends up being exchanged at the XYK pool
-        let (quotes, rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &VAL,
@@ -1467,7 +1466,7 @@ fn test_quote_fast_split_exact_output_target_undercollateralized_should_pass() {
         );
 
         // Buying KSM for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &KSM,
@@ -1492,7 +1491,7 @@ fn test_quote_fast_split_exact_output_target_undercollateralized_should_pass() {
         );
 
         // Buying DOT for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &DOT,
@@ -1528,7 +1527,7 @@ fn test_quote_should_return_rewards_for_single_source() {
         MockMCBCPool::init(get_mcbc_reserves_normal()).unwrap();
         let filter = LiquiditySourceFilter::empty(DEX_D_ID);
 
-        let (_, rewards_forward, _) = LiquidityProxy::quote_single(
+        let (_, rewards_forward, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &VAL,
             &GetBaseAssetId::get(),
@@ -1539,7 +1538,7 @@ fn test_quote_should_return_rewards_for_single_source() {
         )
         .expect("Failed to get a quote");
 
-        let (_, rewards_backward, _) = LiquidityProxy::quote_single(
+        let (_, rewards_backward, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &VAL,
@@ -1585,7 +1584,8 @@ fn test_quote_should_return_rewards_for_multiple_sources() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
 
         assert_eq!(
             rewards,
@@ -1625,7 +1625,8 @@ fn test_quote_should_work_for_synthetics() {
                 false,
                 true,
             )
-            .expect(&format!("Failed to get a quote for {}-{} pair", from, to));
+            .expect(&format!("Failed to get a quote for {}-{} pair", from, to))
+            .0;
         }
     });
 }
@@ -2718,7 +2719,7 @@ fn test_quote_with_no_price_impact_with_desired_input() {
         let amount_ksm_out = balance!(174);
 
         // Buying XOR for VAL
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &VAL,
             &GetBaseAssetId::get(),
@@ -2765,12 +2766,13 @@ fn test_quote_with_no_price_impact_with_desired_input() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(quotes.amount, amount_without_impact.unwrap(), balance!(20));
         assert!(amount_without_impact.unwrap() > quotes.amount);
 
         // Buying KSM for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &KSM,
@@ -2817,7 +2819,8 @@ fn test_quote_with_no_price_impact_with_desired_input() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(quotes.amount, amount_without_impact.unwrap(), balance!(20));
         assert!(amount_without_impact.unwrap() > quotes.amount);
 
@@ -2835,7 +2838,8 @@ fn test_quote_with_no_price_impact_with_desired_input() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(quotes.amount, amount_ksm_out, balance!(1));
         assert_approx_eq!(amount_without_impact.unwrap(), amount_ksm_out, balance!(20));
         assert!(amount_without_impact.unwrap() > quotes.amount);
@@ -2860,7 +2864,7 @@ fn test_quote_with_no_price_impact_with_desired_output() {
         let amount_ksm_out = balance!(174);
 
         // Buying XOR for VAL
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &VAL,
             &GetBaseAssetId::get(),
@@ -2907,7 +2911,8 @@ fn test_quote_with_no_price_impact_with_desired_output() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(
             quotes.amount,
             amount_without_impact.unwrap(),
@@ -2916,7 +2921,7 @@ fn test_quote_with_no_price_impact_with_desired_output() {
         assert!(amount_without_impact.unwrap() < quotes.amount);
 
         // Buying KSM for XOR
-        let (quotes, _rewards, _) = LiquidityProxy::quote_single(
+        let (quotes, _rewards, _, _) = LiquidityProxy::quote_single(
             &GetBaseAssetId::get(),
             &GetBaseAssetId::get(),
             &KSM,
@@ -2963,7 +2968,8 @@ fn test_quote_with_no_price_impact_with_desired_output() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(
             quotes.amount,
             amount_without_impact.unwrap(),
@@ -2985,7 +2991,8 @@ fn test_quote_with_no_price_impact_with_desired_output() {
             false,
             true,
         )
-        .expect("Failed to get a quote");
+        .expect("Failed to get a quote")
+        .0;
         assert_approx_eq!(quotes.amount, amount_val_in, balance!(100));
         assert_approx_eq!(
             amount_without_impact.unwrap(),
@@ -3054,8 +3061,8 @@ fn test_inner_exchange_returns_correct_sources() {
             filter,
         );
 
-        let (_, sources_base) = result_base.expect("inner_exchange: result is not ok!");
-        let (_, sources_val_ksm) = result_val_ksm.expect("inner_exchange: result is not ok!");
+        let (_, sources_base, _) = result_base.expect("inner_exchange: result is not ok!");
+        let (_, sources_val_ksm, _) = result_val_ksm.expect("inner_exchange: result is not ok!");
         let multicoll_source = LiquiditySourceId {
             dex_id: 0,
             liquidity_source_index: LiquiditySourceType::MulticollateralBondingCurvePool,
@@ -3280,83 +3287,96 @@ fn test_disable_enable_liquidity_source() {
 }
 
 #[test]
-fn test_batch_swap_successful() {
-    let mut ext = ExtBuilder::default().with_xyk_pool().build();
-    ext.execute_with(|| {
-        assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(0));
-        assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
-        assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
-
-        assert_ok!(LiquidityProxy::swap_transfer_batch(
-            RuntimeOrigin::signed(alice()),
-            Vec::from([
-                SwapBatchInfo {
-                    outcome_asset_id: USDT,
-                    dex_id: DEX_C_ID,
-                    receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                },
-                SwapBatchInfo {
-                    outcome_asset_id: KSM,
-                    dex_id: DEX_A_ID,
-                    receivers: vec![
-                        BatchReceiverInfo::new(charlie(), balance!(10)),
-                        BatchReceiverInfo::new(dave(), balance!(10)),
-                    ]
-                },
-            ]),
-            XOR,
-            balance!(100),
-            [LiquiditySourceType::XYKPool].to_vec(),
-            FilterMode::AllowSelected,
-        ));
-
-        assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(10));
-        assert_eq!(
-            Assets::free_balance(&KSM, &charlie()).unwrap(),
-            balance!(10)
-        );
-        assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(10));
-    })
-}
-
-#[test]
 fn test_batch_swap_desired_input_successful() {
     let mut ext = ExtBuilder::default().with_xyk_pool().build();
     ext.execute_with(|| {
+        assert_eq!(Assets::free_balance(&XOR, &adar()).unwrap(), balance!(0));
+
         assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(0));
         assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
         assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
 
+        let swap_batches = Vec::from([
+            SwapBatchInfo {
+                outcome_asset_id: USDT,
+                dex_id: DEX_C_ID,
+                receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))],
+            },
+            SwapBatchInfo {
+                outcome_asset_id: KSM,
+                dex_id: DEX_A_ID,
+                receivers: vec![
+                    BatchReceiverInfo::new(charlie(), balance!(10)),
+                    BatchReceiverInfo::new(dave(), balance!(10)),
+                ],
+            },
+        ]);
+
+        let filter_mode = FilterMode::AllowSelected;
+        let sources = [LiquiditySourceType::XYKPool].to_vec();
+        let max_input_amount =
+            calculate_swap_batch_input_amount_with_adar_commission(&swap_batches, sources.clone())
+                + balance!(1);
+
         assert_ok!(LiquidityProxy::swap_transfer_batch(
             RuntimeOrigin::signed(alice()),
-            Vec::from([
-                SwapBatchInfo {
-                    outcome_asset_id: USDT,
-                    dex_id: DEX_C_ID,
-                    receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                },
-                SwapBatchInfo {
-                    outcome_asset_id: KSM,
-                    dex_id: DEX_A_ID,
-                    receivers: vec![
-                        BatchReceiverInfo::new(charlie(), balance!(10)),
-                        BatchReceiverInfo::new(dave(), balance!(10)),
-                    ]
-                },
-            ]),
+            swap_batches.clone(),
             XOR,
-            balance!(32),
-            [LiquiditySourceType::XYKPool].to_vec(),
-            FilterMode::AllowSelected,
+            max_input_amount,
+            sources.clone(),
+            filter_mode,
         ));
 
-        assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(10));
-        assert_eq!(
-            Assets::free_balance(&KSM, &charlie()).unwrap(),
-            balance!(10)
-        );
-        assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(10));
+        test_utils::check_adar_commission(&swap_batches, sources);
+        test_utils::check_swap_batch_executed_amount(swap_batches);
     });
+}
+
+#[test]
+fn test_batch_swap_duplicate_receivers_successful() {
+    let mut ext = ExtBuilder::default().with_xyk_pool().build();
+    ext.execute_with(|| {
+        assert_eq!(Assets::free_balance(&XOR, &adar()).unwrap(), balance!(0));
+
+        assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
+
+        let swap_batches = Vec::from([
+            SwapBatchInfo {
+                outcome_asset_id: USDT,
+                dex_id: DEX_C_ID,
+                receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))],
+            },
+            SwapBatchInfo {
+                outcome_asset_id: KSM,
+                dex_id: DEX_A_ID,
+                receivers: vec![
+                    BatchReceiverInfo::new(charlie(), balance!(10)),
+                    BatchReceiverInfo::new(dave(), balance!(10)),
+                    BatchReceiverInfo::new(dave(), balance!(10)),
+                ],
+            },
+        ]);
+
+        let filter_mode = FilterMode::AllowSelected;
+        let sources = [LiquiditySourceType::XYKPool].to_vec();
+        let max_input_amount =
+            calculate_swap_batch_input_amount_with_adar_commission(&swap_batches, sources.clone())
+                + balance!(1);
+
+        assert_ok!(LiquidityProxy::swap_transfer_batch(
+            RuntimeOrigin::signed(alice()),
+            swap_batches.clone(),
+            XOR,
+            max_input_amount,
+            sources.clone(),
+            filter_mode,
+        ));
+
+        test_utils::check_adar_commission(&swap_batches, sources);
+        test_utils::check_swap_batch_executed_amount(swap_batches);
+    })
 }
 
 #[test]
@@ -3367,27 +3387,34 @@ fn test_batch_swap_desired_input_too_low() {
         assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
         assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
 
+        let swap_batches = Vec::from([
+            SwapBatchInfo {
+                outcome_asset_id: USDT,
+                dex_id: DEX_C_ID,
+                receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))],
+            },
+            SwapBatchInfo {
+                outcome_asset_id: KSM,
+                dex_id: DEX_A_ID,
+                receivers: vec![
+                    BatchReceiverInfo::new(charlie(), balance!(10)),
+                    BatchReceiverInfo::new(dave(), balance!(10)),
+                ],
+            },
+        ]);
+        let sources = [LiquiditySourceType::XYKPool].to_vec();
+
+        let max_input_amount =
+            calculate_swap_batch_input_amount_with_adar_commission(&swap_batches, sources.clone())
+                - balance!(1);
+
         assert_noop!(
             LiquidityProxy::swap_transfer_batch(
                 RuntimeOrigin::signed(alice()),
-                Vec::from([
-                    SwapBatchInfo {
-                        outcome_asset_id: USDT,
-                        dex_id: DEX_C_ID,
-                        receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                    },
-                    SwapBatchInfo {
-                        outcome_asset_id: KSM,
-                        dex_id: DEX_A_ID,
-                        receivers: vec![
-                            BatchReceiverInfo::new(charlie(), balance!(10)),
-                            BatchReceiverInfo::new(dave(), balance!(10)),
-                        ]
-                    },
-                ]),
+                swap_batches,
                 XOR,
-                balance!(1),
-                [LiquiditySourceType::XYKPool].to_vec(),
+                max_input_amount,
+                sources,
                 FilterMode::AllowSelected,
             ),
             Error::<Runtime>::SlippageNotTolerated
@@ -3403,29 +3430,31 @@ fn test_batch_swap_fail_with_duplicate_asset_ids() {
         assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
         assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
 
+        let swap_batches = Vec::from([
+            SwapBatchInfo {
+                outcome_asset_id: USDT,
+                dex_id: DEX_C_ID,
+                receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))],
+            },
+            SwapBatchInfo {
+                outcome_asset_id: USDT,
+                dex_id: DEX_A_ID,
+                receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))],
+            },
+            SwapBatchInfo {
+                outcome_asset_id: KSM,
+                dex_id: DEX_A_ID,
+                receivers: vec![
+                    BatchReceiverInfo::new(charlie(), balance!(10)),
+                    BatchReceiverInfo::new(dave(), balance!(10)),
+                ],
+            },
+        ]);
+
         assert_noop!(
             LiquidityProxy::swap_transfer_batch(
                 RuntimeOrigin::signed(alice()),
-                Vec::from([
-                    SwapBatchInfo {
-                        outcome_asset_id: USDT,
-                        dex_id: DEX_C_ID,
-                        receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                    },
-                    SwapBatchInfo {
-                        outcome_asset_id: USDT,
-                        dex_id: DEX_A_ID,
-                        receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                    },
-                    SwapBatchInfo {
-                        outcome_asset_id: KSM,
-                        dex_id: DEX_A_ID,
-                        receivers: vec![
-                            BatchReceiverInfo::new(charlie(), balance!(10)),
-                            BatchReceiverInfo::new(dave(), balance!(10)),
-                        ]
-                    },
-                ]),
+                swap_batches,
                 XOR,
                 balance!(100),
                 [LiquiditySourceType::XYKPool].to_vec(),
@@ -3437,38 +3466,84 @@ fn test_batch_swap_fail_with_duplicate_asset_ids() {
 }
 
 #[test]
-fn test_batch_swap_fail_with_duplicate_receivers_within_asset_id() {
-    let mut ext = ExtBuilder::default().with_xyk_pool().build();
+fn test_mint_buy_back_and_burn() {
+    let mut ext = ExtBuilder::with_enabled_sources(vec![
+        LiquiditySourceType::MulticollateralBondingCurvePool,
+        LiquiditySourceType::XSTPool,
+    ])
+    .with_xyk_pool()
+    .build();
     ext.execute_with(|| {
-        assert_eq!(Assets::free_balance(&USDT, &bob()).unwrap(), balance!(0));
-        assert_eq!(Assets::free_balance(&KSM, &charlie()).unwrap(), balance!(0));
-        assert_eq!(Assets::free_balance(&KSM, &dave()).unwrap(), balance!(0));
+        let transit = <Runtime as crate::Config>::GetTechnicalAccountId::get();
+        assert_eq!(Assets::free_balance(&KSM, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&USDT, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::total_issuance(&USDT).unwrap(), balance!(24000));
+        assert_eq!(Assets::total_issuance(&KSM).unwrap(), balance!(4000));
 
-        assert_noop!(
-            LiquidityProxy::swap_transfer_batch(
-                RuntimeOrigin::signed(alice()),
-                Vec::from([
-                    SwapBatchInfo {
-                        outcome_asset_id: USDT,
-                        dex_id: DEX_C_ID,
-                        receivers: vec![BatchReceiverInfo::new(bob(), balance!(10))]
-                    },
-                    SwapBatchInfo {
-                        outcome_asset_id: KSM,
-                        dex_id: DEX_A_ID,
-                        receivers: vec![
-                            BatchReceiverInfo::new(charlie(), balance!(10)),
-                            BatchReceiverInfo::new(dave(), balance!(10)),
-                            BatchReceiverInfo::new(dave(), balance!(10)),
-                        ]
-                    },
-                ]),
-                XOR,
-                balance!(100),
-                [LiquiditySourceType::XYKPool].to_vec(),
-                FilterMode::AllowSelected,
-            ),
-            Error::<Runtime>::AggregationError
+        assert_eq!(crate::LiquidityProxyBuyBackHandler::<
+            Runtime,
+            GetBuyBackDexId,
+        >::mint_buy_back_and_burn(&USDT, &KSM, balance!(1)).unwrap(), balance!(1.984061762988045965));
+
+        assert_eq!(Assets::total_issuance(&USDT).unwrap(), balance!(24001));
+        assert_eq!(
+            Assets::total_issuance(&KSM).unwrap(),
+            balance!(3998.015938237011954035)
+        );
+        assert_eq!(Assets::free_balance(&KSM, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&USDT, &transit).unwrap(), balance!(0));
+    });
+}
+
+#[test]
+fn test_buy_back_handler() {
+    let mut ext = ExtBuilder::with_enabled_sources(vec![
+        LiquiditySourceType::MulticollateralBondingCurvePool,
+        LiquiditySourceType::XSTPool,
+    ])
+    .with_xyk_pool()
+    .build();
+    ext.execute_with(|| {
+        let transit = <Runtime as crate::Config>::GetTechnicalAccountId::get();
+        assert_eq!(Assets::free_balance(&KSM, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&USDT, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::total_issuance(&USDT).unwrap(), balance!(24000));
+        assert_eq!(Assets::total_issuance(&KSM).unwrap(), balance!(4000));
+        assert_eq!(
+            Assets::free_balance(&KSM, &alice()).unwrap(),
+            balance!(2000)
+        );
+        assert_eq!(
+            Assets::free_balance(&USDT, &alice()).unwrap(),
+            balance!(12000)
+        );
+
+        assert_eq!(
+            crate::LiquidityProxyBuyBackHandler::<Runtime, GetBuyBackDexId>::buy_back_and_burn(
+                &alice(),
+                &USDT,
+                &KSM,
+                balance!(1)
+            )
+            .unwrap(),
+            balance!(1.984061762988045965)
+        );
+
+        assert_eq!(Assets::total_issuance(&USDT).unwrap(), balance!(24000));
+        assert_eq!(
+            Assets::total_issuance(&KSM).unwrap(),
+            balance!(3998.015938237011954035)
+        );
+        assert_eq!(Assets::free_balance(&KSM, &transit).unwrap(), balance!(0));
+        assert_eq!(Assets::free_balance(&USDT, &transit).unwrap(), balance!(0));
+
+        assert_eq!(
+            Assets::free_balance(&KSM, &alice()).unwrap(),
+            balance!(2000)
+        );
+        assert_eq!(
+            Assets::free_balance(&USDT, &alice()).unwrap(),
+            balance!(11999)
         );
     });
 }

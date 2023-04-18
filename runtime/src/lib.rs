@@ -48,22 +48,30 @@ pub mod mock;
 #[cfg(test)]
 pub mod tests;
 
-use crate::impls::{BridgeAssetRegistryImpl, PreimageWeightInfo, SubstrateBridgeCallFilter};
-use bridge_types::types::{AdditionalEVMInboundData, LeafExtraData, ParachainMessage};
+use crate::impls::PreimageWeightInfo;
+#[cfg(feature = "wip")]
+use crate::impls::{
+    BridgeAssetRegistryImpl, DispatchableSubstrateBridgeCall, EVMBridgeCallFilter,
+    SubstrateBridgeCallFilter,
+};
+#[cfg(feature = "wip")]
+use bridge_types::{
+    types::{AdditionalEVMInboundData, LeafExtraData, ParachainMessage},
+    U256,
+};
 use common::prelude::constants::{BIG_FEE, SMALL_FEE};
 use common::prelude::QuoteAmount;
-use common::{AssetId32, Description, PredefinedAssetId, XOR};
+use common::Description;
+#[cfg(feature = "wip")]
+use common::{AssetId32, PredefinedAssetId, XOR};
 use constants::currency::deposit;
 use constants::time::*;
-use frame_support::instances::{Instance1, Instance2};
 use frame_support::weights::ConstantMultiplier;
 
 // Make the WASM binary available.
 #[cfg(all(feature = "std", feature = "build-wasm-binary"))]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
-pub use beefy_primitives::crypto::AuthorityId as BeefyId;
-use beefy_primitives::mmr::MmrLeafVersion;
 use core::time::Duration;
 use currencies::BasicCurrencyAdapter;
 use extensions::ChargeTransactionPayment;
@@ -80,15 +88,20 @@ use pallet_staking::sora::ValBurnedNotifier;
 #[cfg(feature = "std")]
 use serde::{Serialize, Serializer};
 use sp_api::impl_runtime_apis;
+pub use sp_beefy::crypto::AuthorityId as BeefyId;
+#[cfg(feature = "wip")]
+use sp_beefy::mmr::MmrLeafVersion;
 use sp_core::crypto::KeyTypeId;
-use sp_core::{Encode, OpaqueMetadata, H160, U256};
+use sp_core::{Encode, OpaqueMetadata, H160};
 use sp_mmr_primitives as mmr;
 use sp_runtime::traits::{
     BlakeTwo256, Block as BlockT, Convert, IdentifyAccount, IdentityLookup, NumberFor, OpaqueKeys,
     SaturatedConversion, Verify,
 };
+#[cfg(feature = "wip")]
+use sp_runtime::transaction_validity::TransactionLongevity;
 use sp_runtime::transaction_validity::{
-    TransactionLongevity, TransactionPriority, TransactionSource, TransactionValidity,
+    TransactionPriority, TransactionSource, TransactionValidity,
 };
 use sp_runtime::{
     create_runtime_str, generic, impl_opaque_keys, ApplyExtrinsicResult, DispatchError,
@@ -109,9 +122,10 @@ pub use common::prelude::{
 };
 pub use common::weights::{BlockLength, BlockWeights, TransactionByteFee};
 pub use common::{
-    balance, fixed, fixed_from_basis_points, AssetName, AssetSymbol, BalancePrecision, BasisPoints,
-    ContentSource, FilterMode, Fixed, FromGenericPair, LiquiditySource, LiquiditySourceFilter,
-    LiquiditySourceId, LiquiditySourceType, OnPswapBurned, OnValBurned,
+    balance, fixed, fixed_from_basis_points, AssetInfoProvider, AssetName, AssetSymbol,
+    BalancePrecision, BasisPoints, ContentSource, CrowdloanTag, DexInfoProvider, FilterMode, Fixed,
+    FromGenericPair, LiquiditySource, LiquiditySourceFilter, LiquiditySourceId,
+    LiquiditySourceType, OnPswapBurned, OnValBurned,
 };
 use constants::rewards::{PSWAP_BURN_PERCENT, VAL_BURN_PERCENT};
 pub use ethereum_light_client::EthereumHeader;
@@ -120,9 +134,7 @@ pub use frame_support::traits::schedule::Named as ScheduleNamed;
 pub use frame_support::traits::{
     KeyOwnerProofSystem, LockIdentifier, OnUnbalanced, Randomness, U128CurrencyToVote,
 };
-pub use frame_support::weights::constants::{
-    BlockExecutionWeight, RocksDbWeight, WEIGHT_PER_SECOND,
-};
+pub use frame_support::weights::constants::{BlockExecutionWeight, RocksDbWeight};
 pub use frame_support::weights::Weight;
 pub use frame_support::{construct_runtime, debug, parameter_types, StorageValue};
 pub use pallet_balances::Call as BalancesCall;
@@ -132,20 +144,20 @@ pub use pallet_timestamp::Call as TimestampCall;
 pub use pallet_transaction_payment::{Multiplier, MultiplierUpdate};
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
-pub use vested_rewards::CrowdloanReward;
 
 use eth_bridge::offchain::SignatureParams;
 use eth_bridge::requests::{AssetKind, OffchainRequest, OutgoingRequestEncoded, RequestStatus};
 use impls::{
-    CollectiveWeightInfo, DemocracyWeightInfo, DispatchableSubstrateBridgeCall,
-    NegativeImbalanceOf, OnUnbalancedDemocracySlash,
+    CollectiveWeightInfo, DemocracyWeightInfo, NegativeImbalanceOf, OnUnbalancedDemocracySlash,
 };
 
-use frame_support::traits::{
-    Contains, Everything, ExistenceRequirement, Get, PrivilegeCmp, WithdrawReasons,
-};
+use frame_support::traits::{Everything, ExistenceRequirement, Get, PrivilegeCmp, WithdrawReasons};
+#[cfg(feature = "wip")]
 use sp_runtime::traits::Keccak256;
-pub use {assets, eth_bridge, frame_system, multicollateral_bonding_curve_pool, xst};
+pub use {
+    assets, eth_bridge, frame_system, multicollateral_bonding_curve_pool, order_book, trading_pair,
+    xst,
+};
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -197,11 +209,6 @@ type AtLeastTwoThirdsCouncil = EitherOfDiverse<
     EnsureRoot<AccountId>,
 >;
 
-type SlashCancelOrigin = EitherOfDiverse<
-    EnsureRoot<AccountId>,
-    pallet_collective::EnsureProportionAtLeast<AccountId, CouncilCollective, 2, 3>,
->;
-
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
 /// of data like extrinsics, allowing for them to continue syncing the network through upgrades
@@ -243,10 +250,10 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("sora-substrate"),
     impl_name: create_runtime_str!("sora-substrate"),
     authoring_version: 1,
-    spec_version: 47,
+    spec_version: 49,
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
-    transaction_version: 47,
+    transaction_version: 49,
     state_version: 0,
 };
 
@@ -271,7 +278,6 @@ parameter_types! {
     pub const DisabledValidatorsThreshold: Perbill = Perbill::from_percent(17);
     pub const EpochDuration: u64 = EPOCH_DURATION_IN_BLOCKS as u64;
     pub const ExpectedBlockTime: Moment = MILLISECS_PER_BLOCK;
-    pub const UncleGenerations: BlockNumber = 0;
     pub const SessionsPerEra: sp_staking::SessionIndex = 6; // 6 hours
     pub const BondingDuration: sp_staking::EraIndex = 28; // 28 eras for unbonding (7 days).
     pub const ReportLongevity: u64 =
@@ -316,15 +322,16 @@ parameter_types! {
     pub const DemocracyPreimageByteDeposit: Balance = balance!(0.000002); // 2 * 10^-6, 5 MiB -> 10.48576 XOR
     pub const DemocracyMaxVotes: u32 = 100;
     pub const DemocracyMaxProposals: u32 = 100;
-    pub const DemocracyMaxDeposits: u32 = 100; // todo
-    pub const DemocracyMaxBlacklisted: u32 = 100; // todo
+    pub const DemocracyMaxDeposits: u32 = 100;
+    pub const DemocracyMaxBlacklisted: u32 = 100;
     pub const CouncilCollectiveMotionDuration: BlockNumber = 5 * DAYS;
     pub const CouncilCollectiveMaxProposals: u32 = 100;
     pub const CouncilCollectiveMaxMembers: u32 = 100;
     pub const TechnicalCollectiveMotionDuration: BlockNumber = 5 * DAYS;
     pub const TechnicalCollectiveMaxProposals: u32 = 100;
     pub const TechnicalCollectiveMaxMembers: u32 = 100;
-    pub const SchedulerMaxWeight: Weight = Weight::from_ref_time(1024);
+    pub SchedulerMaxWeight: Weight = Perbill::from_percent(80) * BlockWeights::get().max_block;
+    pub const MaxScheduledPerBlock: u32 = 50;
     pub OffencesWeightSoftLimit: Weight = Perbill::from_percent(60) * BlockWeights::get().max_block;
     pub const ImOnlineUnsignedPriority: TransactionPriority = TransactionPriority::max_value();
     pub const SessionDuration: BlockNumber = EPOCH_DURATION_IN_BLOCKS;
@@ -337,6 +344,8 @@ parameter_types! {
     /// 13 members initially, to be increased to 23 eventually.
     pub const ElectionsDesiredMembers: u32 = 13;
     pub const ElectionsDesiredRunnersUp: u32 = 20;
+    pub const ElectionsMaxVoters: u32 = 10000;
+    pub const ElectionsMaxCandidates: u32 = 1000;
     pub const ElectionsModuleId: LockIdentifier = *b"phrelect";
     pub FarmingRewardDoublingAssets: Vec<AssetId> = vec![GetPswapAssetId::get(), GetValAssetId::get(), GetDaiAssetId::get(), GetEthAssetId::get(), GetXstAssetId::get()];
     pub const MaxAuthorities: u32 = 100_000;
@@ -488,8 +497,8 @@ impl pallet_elections_phragmen::Config for Runtime {
     type DesiredMembers = ElectionsDesiredMembers;
     type DesiredRunnersUp = ElectionsDesiredRunnersUp;
     type TermDuration = ElectionsTermDuration;
-    type MaxVoters = ();
-    type MaxCandidates = ();
+    type MaxVoters = ElectionsMaxVoters;
+    type MaxCandidates = ElectionsMaxCandidates;
     type WeightInfo = ();
 }
 
@@ -502,8 +511,12 @@ impl pallet_membership::Config<pallet_membership::Instance1> for Runtime {
     type PrimeOrigin = MoreThanHalfCouncil;
     type MembershipInitialized = TechnicalCommittee;
     type MembershipChanged = TechnicalCommittee;
-    type MaxMembers = ();
+    type MaxMembers = TechnicalCollectiveMaxMembers;
     type WeightInfo = ();
+}
+
+parameter_types! {
+    pub const MaxSetIdSessionEntries: u32 = BondingDuration::get() * SessionsPerEra::get();
 }
 
 impl pallet_grandpa::Config for Runtime {
@@ -526,6 +539,7 @@ impl pallet_grandpa::Config for Runtime {
     >;
     type WeightInfo = ();
     type MaxAuthorities = MaxAuthorities;
+    type MaxSetIdSessionEntries = MaxSetIdSessionEntries;
 }
 
 parameter_types! {
@@ -559,8 +573,6 @@ impl pallet_session::historical::Config for Runtime {
 
 impl pallet_authorship::Config for Runtime {
     type FindAuthor = pallet_session::FindAccountFromAuthorIndex<Self, Babe>;
-    type UncleGenerations = UncleGenerations;
-    type FilterUncle = ();
     type EventHandler = (Staking, ImOnline);
 }
 
@@ -576,6 +588,11 @@ parameter_types! {
     pub const MaxNominations: u32 = <NposCompactSolution24 as frame_election_provider_support::NposSolution>::LIMIT as u32;
 }
 
+type StakingAdminOrigin = EitherOfDiverse<
+    EnsureRoot<AccountId>,
+    pallet_collective::EnsureProportionAtLeast<AccountId, CouncilCollective, 3, 4>,
+>;
+
 impl pallet_staking::Config for Runtime {
     type Currency = Balances;
     type MultiCurrency = Tokens;
@@ -589,7 +606,7 @@ impl pallet_staking::Config for Runtime {
     type SessionsPerEra = SessionsPerEra;
     type BondingDuration = BondingDuration;
     type SlashDeferDuration = SlashDeferDuration;
-    type SlashCancelOrigin = SlashCancelOrigin;
+    type AdminOrigin = StakingAdminOrigin;
     type SessionInterface = Self;
     type NextNewSession = Session;
     type MaxNominatorRewardedPerValidator = MaxNominatorRewardedPerValidator;
@@ -599,7 +616,7 @@ impl pallet_staking::Config for Runtime {
     type MaxUnlockingChunks = ConstU32<32>;
     type OffendingValidatorsThreshold = OffendingValidatorsThreshold;
     type MaxNominations = MaxNominations;
-    type GenesisElectionProvider = onchain::UnboundedExecution<OnChainSeqPhragmen>;
+    type GenesisElectionProvider = onchain::OnChainExecution<OnChainSeqPhragmen>;
     type OnStakerSlash = ();
     type HistoryDepth = frame_support::traits::ConstU32<84>;
     type TargetList = pallet_staking::UseValidatorsMap<Self>;
@@ -643,6 +660,9 @@ parameter_types! {
     /// ... and all of the validators as electable targets. Whilst this is the case, we cannot and
     /// shall not increase the size of the validator intentions.
     pub const MaxElectableTargets: u16 = u16::MAX;
+    /// Setup election pallet to support maximum winners upto 1200. This will mean Staking Pallet
+    /// cannot have active validators higher than this count.
+    pub const MaxActiveValidators: u32 = 1200;
     pub NposSolutionPriority: TransactionPriority =
         Perbill::from_percent(90) * TransactionPriority::max_value();
 }
@@ -666,6 +686,9 @@ impl onchain::Config for OnChainSeqPhragmen {
     type Solver = SequentialPhragmen<AccountId, OnChainAccuracy>;
     type DataProvider = Staking;
     type WeightInfo = ();
+    type MaxWinners = MaxActiveValidators;
+    type VotersBound = MaxElectingVoters;
+    type TargetsBound = MaxElectableTargets;
 }
 
 impl pallet_election_provider_multi_phase::MinerConfig for Runtime {
@@ -712,8 +735,13 @@ impl pallet_election_provider_multi_phase::Config for Runtime {
     type OffchainRepeat = OffchainRepeat;
     type MinerTxPriority = NposSolutionPriority;
     type DataProvider = Staking;
-    type Fallback = pallet_election_provider_multi_phase::NoFallback<Self>;
-    type GovernanceFallback = onchain::UnboundedExecution<OnChainSeqPhragmen>;
+    type Fallback = frame_election_provider_support::NoElection<(
+        AccountId,
+        BlockNumber,
+        Staking,
+        MaxActiveValidators,
+    )>;
+    type GovernanceFallback = onchain::OnChainExecution<OnChainSeqPhragmen>;
     type Solver = SequentialPhragmen<
         AccountId,
         pallet_election_provider_multi_phase::SolutionAccuracyOf<Self>,
@@ -727,6 +755,7 @@ impl pallet_election_provider_multi_phase::Config for Runtime {
     type WeightInfo = ();
     type MaxElectingVoters = MaxElectingVoters;
     type MaxElectableTargets = MaxElectableTargets;
+    type MaxWinners = MaxActiveValidators;
 }
 
 parameter_types! {
@@ -771,7 +800,7 @@ impl pallet_scheduler::Config for Runtime {
     type RuntimeCall = RuntimeCall;
     type MaximumWeight = SchedulerMaxWeight;
     type ScheduleOrigin = frame_system::EnsureRoot<AccountId>;
-    type MaxScheduledPerBlock = ();
+    type MaxScheduledPerBlock = MaxScheduledPerBlock;
     type WeightInfo = ();
     type OriginPrivilegeCmp = OriginPrivilegeCmp;
     type Preimages = Preimage;
@@ -827,15 +856,10 @@ impl tokens::Config for Runtime {
     type CurrencyId = AssetId;
     type WeightInfo = ();
     type ExistentialDeposits = ExistentialDeposits;
-    type OnDust = ();
-    type OnSlash = ();
-    type OnDeposit = ();
-    type OnTransfer = ();
+    type CurrencyHooks = ();
     type MaxLocks = ();
     type MaxReserves = ();
     type ReserveIdentifier = ();
-    type OnNewTokenAccount = ();
-    type OnKilledTokenAccount = ();
     type DustRemovalWhitelist = Everything;
 }
 
@@ -858,6 +882,7 @@ parameter_types! {
     pub const GetBuyBackAccountId: AccountId = AccountId::new(hex!("feb92c0acb61f75309730290db5cbe8ac9b46db7ad6f3bbb26a550a73586ea71"));
     pub const GetBuyBackDexId: DEXId = 0;
     pub const GetSyntheticBaseAssetId: AssetId = GetXstAssetId::get();
+    pub const GetADARAccountId: AccountId = AccountId::new(hex!("dc5201cda01113be2ca9093c49a92763c95c708dd61df70c945df749c365da5d"));
 }
 
 impl currencies::Config for Runtime {
@@ -988,6 +1013,7 @@ impl liquidity_proxy::Config for Runtime {
     type SecondaryMarket = pool_xyk::Pallet<Runtime>;
     type WeightInfo = liquidity_proxy::weights::WeightInfo<Runtime>;
     type VestedRewardsPallet = VestedRewards;
+    type GetADARAccountId = GetADARAccountId;
 }
 
 impl mock_liquidity_source::Config<mock_liquidity_source::Instance1> for Runtime {
@@ -1026,7 +1052,6 @@ impl dex_api::Config for Runtime {
     type MulticollateralBondingCurvePool = multicollateral_bonding_curve_pool::Pallet<Runtime>;
     type XYKPool = pool_xyk::Pallet<Runtime>;
     type XSTPool = xst::Pallet<Runtime>;
-    type WeightInfo = dex_api::weights::WeightInfo<Runtime>;
 }
 
 impl pallet_multisig::Config for Runtime {
@@ -1155,6 +1180,9 @@ impl<T> xor_fee::ApplyCustomFees<RuntimeCall> for xor_fee::Pallet<T> {
             | RuntimeCall::EthBridge(eth_bridge::Call::transfer_to_sidechain { .. })
             | RuntimeCall::PoolXYK(pool_xyk::Call::withdraw_liquidity { .. })
             | RuntimeCall::Rewards(rewards::Call::claim { .. })
+            | RuntimeCall::VestedRewards(vested_rewards::Call::claim_crowdloan_rewards {
+                ..
+            })
             | RuntimeCall::VestedRewards(vested_rewards::Call::claim_rewards { .. }) => {
                 Some(BIG_FEE)
             }
@@ -1320,18 +1348,19 @@ impl xor_fee::Config for Runtime {
     type ReferrerWeight = ReferrerWeight;
     type XorBurnedWeight = XorBurnedWeight;
     type XorIntoValBurnedWeight = XorIntoValBurnedWeight;
-    type SoraParliamentShare = SoraParliamentShare;
+    type BuyBackXSTPercent = BuyBackXSTPercent;
     type XorId = GetXorAssetId;
     type ValId = GetValAssetId;
+    type XstId = GetXstAssetId;
     type DEXIdValue = DEXIdValue;
     type LiquidityProxy = LiquidityProxy;
     type OnValBurned = ValBurnedAggregator<Staking>;
     type CustomFees = XorFee;
     type GetTechnicalAccountId = GetXorFeeAccountId;
-    type GetParliamentAccountId = GetParliamentAccountId;
     type SessionManager = Staking;
     type WeightInfo = xor_fee::weights::WeightInfo<Runtime>;
     type WithdrawFee = WithdrawFee;
+    type BuyBackHandler = liquidity_proxy::LiquidityProxyBuyBackHandler<Runtime, GetBuyBackDexId>;
 }
 
 pub struct ConstantFeeMultiplier;
@@ -1643,6 +1672,7 @@ impl pswap_distribution::Config for Runtime {
     const PSWAP_BURN_PERCENT: Percent = PSWAP_BURN_PERCENT;
     type RuntimeEvent = RuntimeEvent;
     type GetIncentiveAssetId = GetPswapAssetId;
+    type GetXSTAssetId = GetXstAssetId;
     type LiquidityProxy = LiquidityProxy;
     type CompatBalance = Balance;
     type GetDefaultSubscriptionFrequency = GetDefaultSubscriptionFrequency;
@@ -1653,6 +1683,7 @@ impl pswap_distribution::Config for Runtime {
     type WeightInfo = pswap_distribution::weights::WeightInfo<Runtime>;
     type GetParliamentAccountId = GetParliamentAccountId;
     type PoolXykPallet = PoolXYK;
+    type BuyBackHandler = liquidity_proxy::LiquidityProxyBuyBackHandler<Runtime, GetBuyBackDexId>;
 }
 
 parameter_types! {
@@ -1712,20 +1743,6 @@ parameter_types! {
                 .expect("Failed to get ordinary account id for technical account id.");
         account_id
     };
-    pub GetCrowdloanRewardsTechAccountId: TechAccountId = {
-        let tech_account_id = TechAccountId::from_generic_pair(
-            vested_rewards::TECH_ACCOUNT_PREFIX.to_vec(),
-            vested_rewards::TECH_ACCOUNT_CROWDLOAN.to_vec(),
-        );
-        tech_account_id
-    };
-    pub GetCrowdloanRewardsAccountId: AccountId = {
-        let tech_account_id = GetCrowdloanRewardsTechAccountId::get();
-        let account_id =
-            technical::Pallet::<Runtime>::tech_account_id_to_account_id(&tech_account_id)
-                .expect("Failed to get ordinary account id for technical account id.");
-        account_id
-    };
     pub GetFarmingRewardsTechAccountId: TechAccountId = {
         let tech_account_id = TechAccountId::from_generic_pair(
             vested_rewards::TECH_ACCOUNT_PREFIX.to_vec(),
@@ -1740,6 +1757,7 @@ parameter_types! {
                 .expect("Failed to get ordinary account id for technical account id.");
         account_id
     };
+    pub GetTBCBuyBackXSTPercent: Fixed = fixed!(0.025);
 }
 
 impl multicollateral_bonding_curve_pool::Config for Runtime {
@@ -1750,6 +1768,8 @@ impl multicollateral_bonding_curve_pool::Config for Runtime {
     type PriceToolsPallet = PriceTools;
     type VestedRewardsPallet = VestedRewards;
     type WeightInfo = multicollateral_bonding_curve_pool::weights::WeightInfo<Runtime>;
+    type BuyBackHandler = liquidity_proxy::LiquidityProxyBuyBackHandler<Runtime, GetBuyBackDexId>;
+    type BuyBackXSTPercent = GetTBCBuyBackXSTPercent;
 }
 
 parameter_types! {
@@ -1759,11 +1779,12 @@ parameter_types! {
 impl xst::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type GetSyntheticBaseAssetId = GetXstPoolConversionAssetId;
-    type LiquidityProxy = LiquidityProxy;
+    type GetXSTPoolPermissionedTechAccountId = GetXSTPoolPermissionedTechAccountId;
     type EnsureDEXManager = DEXManager;
-    type EnsureTradingPairExists = TradingPair;
     type PriceToolsPallet = PriceTools;
     type WeightInfo = xst::weights::WeightInfo<Runtime>;
+    type Oracle = OracleProxy;
+    type Symbol = <Runtime as band::Config>::Symbol;
 }
 
 parameter_types! {
@@ -1792,11 +1813,11 @@ impl pallet_offences::Config for Runtime {
 }
 
 impl vested_rewards::Config for Runtime {
+    const BLOCKS_PER_DAY: BlockNumber = 1 * DAYS;
     type RuntimeEvent = RuntimeEvent;
     type GetBondingCurveRewardsAccountId = GetMbcPoolRewardsAccountId;
     type GetFarmingRewardsAccountId = GetFarmingRewardsAccountId;
     type GetMarketMakerRewardsAccountId = GetMarketMakerRewardsAccountId;
-    type GetCrowdloanRewardsAccountId = GetCrowdloanRewardsAccountId;
     type WeightInfo = vested_rewards::weights::WeightInfo<Runtime>;
 }
 
@@ -1808,12 +1829,21 @@ impl price_tools::Config for Runtime {
 
 impl pallet_randomness_collective_flip::Config for Runtime {}
 
+#[cfg(not(feature = "wip"))] // Basic impl for session keys
+impl pallet_beefy::Config for Runtime {
+    type BeefyId = BeefyId;
+    type MaxAuthorities = MaxAuthorities;
+    type OnNewValidatorSet = ();
+}
+
+#[cfg(feature = "wip")] // Bridges
 impl pallet_beefy::Config for Runtime {
     type BeefyId = BeefyId;
     type MaxAuthorities = MaxAuthorities;
     type OnNewValidatorSet = MmrLeaf;
 }
 
+#[cfg(feature = "wip")] // Bridges
 impl pallet_mmr::Config for Runtime {
     const INDEXING_PREFIX: &'static [u8] = b"mmr";
     type Hashing = Keccak256;
@@ -1823,6 +1853,7 @@ impl pallet_mmr::Config for Runtime {
     type LeafData = pallet_beefy_mmr::Pallet<Runtime>;
 }
 
+#[cfg(feature = "wip")] // Bridges
 impl leaf_provider::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Hashing = Keccak256;
@@ -1830,6 +1861,7 @@ impl leaf_provider::Config for Runtime {
     type Randomness = pallet_babe::RandomnessFromTwoEpochsAgo<Self>;
 }
 
+#[cfg(feature = "wip")] // Bridges
 parameter_types! {
     /// Version of the produced MMR leaf.
     ///
@@ -1847,6 +1879,7 @@ parameter_types! {
     pub LeafVersion: MmrLeafVersion = MmrLeafVersion::new(0, 0);
 }
 
+#[cfg(feature = "wip")] // Bridges
 impl pallet_beefy_mmr::Config for Runtime {
     type LeafVersion = LeafVersion;
     type BeefyAuthorityToMerkleLeaf = pallet_beefy_mmr::BeefyEcdsaToEthereum;
@@ -1916,11 +1949,17 @@ impl oracle_proxy::Config for Runtime {
     type BandChainOracle = band::Pallet<Runtime>;
 }
 
+parameter_types! {
+    pub const GetBandRateStalePeriod: u64 = 60*5*1000; // 5 minutes
+}
+
 impl band::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Symbol = Symbol;
     type WeightInfo = band::weights::WeightInfo<Runtime>;
     type OnNewSymbolsRelayedHook = oracle_proxy::Pallet<Runtime>;
+    type UnixTime = Timestamp;
+    type GetBandRateStalePeriod = GetBandRateStalePeriod;
 }
 
 parameter_types! {
@@ -1935,6 +1974,21 @@ impl hermes_governance_platform::Config for Runtime {
     type WeightInfo = hermes_governance_platform::weights::WeightInfo<Runtime>;
 }
 
+#[cfg(feature = "wip")] // order-book
+impl order_book::Config for Runtime {
+    const MAX_ORDER_LIFETIME: Moment = 30 * (DAYS as Moment) * MILLISECS_PER_BLOCK; // 30 days // TODO: order-book clarify
+    const MAX_OPENED_LIMIT_ORDERS_COUNT: u32 = 100;
+    type RuntimeEvent = RuntimeEvent;
+    type OrderId = u128;
+    type MaxOpenedLimitOrdersForAllOrderBooksPerUser = ConstU32<10000>; // TODO: order-book clarify
+    type MaxLimitOrdersForPrice = ConstU32<10000>; // TODO: order-book clarify
+    type MaxSidePrices = ConstU32<100000>; // TODO: order-book clarify
+    type EnsureTradingPairExists = TradingPair;
+    type AssetInfoProvider = Assets;
+    type DexInfoProvider = DEXManager;
+    type WeightInfo = order_book::weights::WeightInfo<Runtime>;
+}
+
 /// Payload data to be signed when making signed transaction from off-chain workers,
 ///   inside `create_transaction` function.
 pub type SignedPayload = generic::SignedPayload<RuntimeCall, SignedExtra>;
@@ -1943,19 +1997,13 @@ parameter_types! {
     pub const ReferrerWeight: u32 = 10;
     pub const XorBurnedWeight: u32 = 40;
     pub const XorIntoValBurnedWeight: u32 = 50;
-    pub const SoraParliamentShare: Percent = Percent::from_percent(10);
+    pub const BuyBackXSTPercent: Percent = Percent::from_percent(10);
 }
 
 // Ethereum bridge pallets
 
-pub struct CallFilter;
-impl Contains<RuntimeCall> for CallFilter {
-    fn contains(_: &RuntimeCall) -> bool {
-        true
-    }
-}
-
-impl dispatch::Config<Instance1> for Runtime {
+#[cfg(feature = "wip")] // EVM bridge
+impl dispatch::Config<dispatch::Instance1> for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NetworkId = EVMChainId;
     type Additional = AdditionalEVMInboundData;
@@ -1965,11 +2013,13 @@ impl dispatch::Config<Instance1> for Runtime {
     type MessageId = bridge_types::types::MessageId;
     type Hashing = Keccak256;
     type Call = RuntimeCall;
-    type CallFilter = CallFilter;
+    type CallFilter = EVMBridgeCallFilter;
 }
 
+#[cfg(feature = "wip")]
 use bridge_types::{EVMChainId, SubNetworkId, CHANNEL_INDEXING_PREFIX, H256};
 
+#[cfg(feature = "wip")] // Bridges
 parameter_types! {
     pub const BridgeMaxMessagePayloadSize: u64 = 256;
     pub const BridgeMaxMessagesPerCommit: u64 = 20;
@@ -1977,7 +2027,10 @@ parameter_types! {
     pub const Decimals: u32 = 12;
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 pub struct FeeConverter;
+
+#[cfg(feature = "wip")] // EVM bridge
 impl Convert<U256, Balance> for FeeConverter {
     fn convert(amount: U256) -> Balance {
         common::eth::unwrap_balance(amount, Decimals::get())
@@ -1985,10 +2038,12 @@ impl Convert<U256, Balance> for FeeConverter {
     }
 }
 
+#[cfg(feature = "wip")] // Bridges
 parameter_types! {
     pub const FeeCurrency: AssetId32<PredefinedAssetId> = XOR;
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl bridge_inbound_channel::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Verifier = ethereum_light_client::Pallet<Runtime>;
@@ -2003,6 +2058,7 @@ impl bridge_inbound_channel::Config for Runtime {
     type TreasuryTechAccountId = GetTreasuryTechAccountId;
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl bridge_outbound_channel::Config for Runtime {
     const INDEXING_PREFIX: &'static [u8] = CHANNEL_INDEXING_PREFIX;
     type RuntimeEvent = RuntimeEvent;
@@ -2017,6 +2073,7 @@ impl bridge_outbound_channel::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 parameter_types! {
     pub const DescendantsUntilFinalized: u8 = 30;
     pub const VerifyPoW: bool = true;
@@ -2027,6 +2084,7 @@ parameter_types! {
     pub EthereumLightClientLongevity: TransactionLongevity = EPOCH_DURATION_IN_BLOCKS as u64;
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl ethereum_light_client::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type DescendantsUntilFinalized = DescendantsUntilFinalized;
@@ -2038,6 +2096,7 @@ impl ethereum_light_client::Config for Runtime {
     type Submitter = <Signature as Verify>::Signer;
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl eth_app::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type OutboundChannel = BridgeOutboundChannel;
@@ -2051,6 +2110,7 @@ impl eth_app::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl erc20_app::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type OutboundChannel = BridgeOutboundChannel;
@@ -2065,12 +2125,14 @@ impl erc20_app::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // EVM bridge
 impl migration_app::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type OutboundChannel = BridgeOutboundChannel;
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // Bridges
 impl evm_bridge_proxy::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type ERC20App = ERC20App;
@@ -2078,13 +2140,15 @@ impl evm_bridge_proxy::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 impl beefy_light_client::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Message = Vec<ParachainMessage<Balance>>;
     type Randomness = pallet_babe::RandomnessFromTwoEpochsAgo<Self>;
 }
 
-impl dispatch::Config<Instance2> for Runtime {
+#[cfg(feature = "wip")] // Substrate bridge
+impl dispatch::Config<dispatch::Instance2> for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type NetworkId = SubNetworkId;
     type Additional = ();
@@ -2096,6 +2160,7 @@ impl dispatch::Config<Instance2> for Runtime {
     type CallFilter = SubstrateBridgeCallFilter;
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 impl substrate_bridge_channel::inbound::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type Verifier = BeefyLightClient;
@@ -2110,6 +2175,7 @@ impl substrate_bridge_channel::inbound::Config for Runtime {
     type Currency = Currencies;
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 impl substrate_bridge_channel::outbound::Config for Runtime {
     const INDEXING_PREFIX: &'static [u8] = CHANNEL_INDEXING_PREFIX;
     type RuntimeEvent = RuntimeEvent;
@@ -2124,6 +2190,7 @@ impl substrate_bridge_channel::outbound::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 impl substrate_bridge_app::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
     type OutboundChannel = SubstrateBridgeOutboundChannel;
@@ -2139,7 +2206,6 @@ impl substrate_bridge_app::Config for Runtime {
     type WeightInfo = ();
 }
 
-#[cfg(feature = "private-net")]
 construct_runtime! {
     pub enum Runtime where
         Block = Block,
@@ -2153,7 +2219,6 @@ construct_runtime! {
         Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent} = 1,
         // Balances in native currency - XOR.
         Balances: pallet_balances::{Pallet, Storage, Config<T>, Event<T>} = 2,
-        Sudo: pallet_sudo::{Pallet, Call, Storage, Config<T>, Event<T>} = 3,
         RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Pallet, Storage} = 4,
         TransactionPayment: pallet_transaction_payment::{Pallet, Storage, Event<T>} = 5,
         Permissions: permissions::{Pallet, Call, Storage, Config<T>, Event<T>} = 6,
@@ -2164,7 +2229,7 @@ construct_runtime! {
         Utility: pallet_utility::{Pallet, Call, Event} = 11,
 
         // Consensus and staking.
-        Authorship: pallet_authorship::{Pallet, Call, Storage, Inherent} = 16,
+        Authorship: pallet_authorship::{Pallet, Storage} = 16,
         Staking: pallet_staking::{Pallet, Call, Config<T>, Storage, Event<T>} = 17,
         Offences: pallet_offences::{Pallet, Storage, Event} = 37,
         Historical: pallet_session_historical::{Pallet} = 13,
@@ -2194,7 +2259,7 @@ construct_runtime! {
         IrohaMigration: iroha_migration::{Pallet, Call, Storage, Config<T>, Event<T>} = 35,
         TechnicalMembership: pallet_membership::<Instance1>::{Pallet, Call, Storage, Event<T>, Config<T>} = 38,
         ElectionsPhragmen: pallet_elections_phragmen::{Pallet, Call, Storage, Event<T>, Config<T>} = 39,
-        VestedRewards: vested_rewards::{Pallet, Call, Storage, Event<T>, Config} = 40,
+        VestedRewards: vested_rewards::{Pallet, Call, Storage, Event<T>} = 40,
         Identity: pallet_identity::{Pallet, Call, Storage, Event<T>} = 41,
         Farming: farming::{Pallet, Storage} = 42,
         XSTPool: xst::{Pallet, Call, Storage, Config<T>, Event<T>} = 43,
@@ -2211,126 +2276,59 @@ construct_runtime! {
         Band: band::{Pallet, Call, Storage, Event<T>} = 53,
         OracleProxy: oracle_proxy::{Pallet, Call, Storage, Event<T>} = 54,
         HermesGovernancePlatform: hermes_governance_platform::{Pallet, Call, Storage, Event<T>} = 55,
+        Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 56,
+
+        #[cfg(feature = "wip")] // order-book
+        OrderBook: order_book::{Pallet, Call, Storage, Event<T>} = 57,
+
+        // Trustless bridges
+        #[cfg(feature = "wip")] // Bridges
+        Mmr: pallet_mmr::{Pallet, Storage} = 90,
+        // In production needed for session keys
+        Beefy: pallet_beefy::{Pallet, Config<T>, Storage} = 91,
+        #[cfg(feature = "wip")] // Bridges
+        MmrLeaf: pallet_beefy_mmr::{Pallet, Storage} = 92,
+        #[cfg(feature = "wip")] // Bridges
+        LeafProvider: leaf_provider::{Pallet, Storage, Event<T>} = 99,
+        // TODO: rename to BridgeProxy
+        #[cfg(feature = "wip")] // Bridges
+        EvmBridgeProxy: evm_bridge_proxy::{Pallet, Call, Storage, Event} = 103,
+
+        // Trustless EVM bridge
+        #[cfg(feature = "wip")] // EVM bridge
+        EthereumLightClient: ethereum_light_client::{Pallet, Call, Storage, Event<T>, Config, ValidateUnsigned} = 93,
+        #[cfg(feature = "wip")] // EVM bridge
+        BridgeInboundChannel: bridge_inbound_channel::{Pallet, Call, Config, Storage, Event<T>} = 96,
+        #[cfg(feature = "wip")] // EVM bridge
+        BridgeOutboundChannel: bridge_outbound_channel::{Pallet, Config<T>, Storage, Event<T>} = 97,
+        #[cfg(feature = "wip")] // EVM bridge
+        Dispatch: dispatch::<Instance1>::{Pallet, Storage, Event<T>, Origin<T>} = 98,
+        #[cfg(feature = "wip")] // EVM bridge
+        EthApp: eth_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 100,
+        #[cfg(feature = "wip")] // EVM bridge
+        ERC20App: erc20_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 101,
+        #[cfg(feature = "wip")] // EVM bridge
+        MigrationApp: migration_app::{Pallet, Call, Storage, Event<T>, Config} = 102,
+
+        // Substrate bridge
+        #[cfg(feature = "wip")] // Substrate bridge
+        BeefyLightClient: beefy_light_client::{Pallet, Call, Storage, Event<T>, Config} = 104,
+        #[cfg(feature = "wip")] // Substrate bridge
+        SubstrateBridgeInboundChannel: substrate_bridge_channel::inbound::{Pallet, Call, Config, Storage, Event<T>} = 106,
+        #[cfg(feature = "wip")] // Substrate bridge
+        SubstrateBridgeOutboundChannel: substrate_bridge_channel::outbound::{Pallet, Config<T>, Storage, Event<T>} = 107,
+        #[cfg(feature = "wip")] // Substrate bridge
+        SubstrateDispatch: dispatch::<Instance2>::{Pallet, Storage, Event<T>, Origin<T>} = 108,
+        #[cfg(feature = "wip")] // Substrate bridge
+        SubstrateBridgeApp: substrate_bridge_app::{Pallet, Config<T>, Storage, Event<T>, Call} = 109,
+
+        // Dev
+        #[cfg(feature = "private-net")]
+        Sudo: pallet_sudo::{Pallet, Call, Storage, Config<T>, Event<T>} = 3,
 
         // Available only for test net
+        #[cfg(feature = "private-net")]
         Faucet: faucet::{Pallet, Call, Config<T>, Event<T>} = 80,
-
-        // Trustless ethereum bridge
-        Mmr: pallet_mmr::{Pallet, Storage} = 90,
-        Beefy: pallet_beefy::{Pallet, Config<T>, Storage} = 91,
-        MmrLeaf: pallet_beefy_mmr::{Pallet, Storage} = 92,
-        EthereumLightClient: ethereum_light_client::{Pallet, Call, Storage, Event<T>, Config, ValidateUnsigned} = 93,
-        BridgeInboundChannel: bridge_inbound_channel::{Pallet, Call, Config, Storage, Event<T>} = 96,
-        BridgeOutboundChannel: bridge_outbound_channel::{Pallet, Config<T>, Storage, Event<T>} = 97,
-        Dispatch: dispatch::<Instance1>::{Pallet, Storage, Event<T>, Origin<T>} = 98,
-        LeafProvider: leaf_provider::{Pallet, Storage, Event<T>} = 99,
-        EthApp: eth_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 100,
-        ERC20App: erc20_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 101,
-        MigrationApp: migration_app::{Pallet, Call, Storage, Event<T>, Config} = 102,
-        EvmBridgeProxy: evm_bridge_proxy::{Pallet, Call, Storage, Event} = 103,
-
-        BeefyLightClient: beefy_light_client::{Pallet, Call, Storage, Event<T>, Config} = 104,
-        Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 105,
-        SubstrateBridgeInboundChannel: substrate_bridge_channel::inbound::{Pallet, Call, Config, Storage, Event<T>} = 106,
-        SubstrateBridgeOutboundChannel: substrate_bridge_channel::outbound::{Pallet, Config<T>, Storage, Event<T>} = 107,
-        SubstrateDispatch: dispatch::<Instance2>::{Pallet, Storage, Event<T>, Origin<T>} = 108,
-        SubstrateBridgeApp: substrate_bridge_app::{Pallet, Config<T>, Storage, Event<T>, Call} = 109,
-    }
-}
-
-#[cfg(not(feature = "private-net"))]
-construct_runtime! {
-    pub enum Runtime where
-        Block = Block,
-        NodeBlock = opaque::Block,
-        UncheckedExtrinsic = UncheckedExtrinsic
-    {
-        System: frame_system::{Pallet, Call, Storage, Config, Event<T>} = 0,
-
-        Babe: pallet_babe::{Pallet, Call, Storage, Config, ValidateUnsigned} = 14,
-
-        Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent} = 1,
-        // Balances in native currency - XOR.
-        Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>} = 2,
-        RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Pallet, Storage} = 4,
-        TransactionPayment: pallet_transaction_payment::{Pallet, Storage, Event<T>} = 5,
-        Permissions: permissions::{Pallet, Call, Storage, Config<T>, Event<T>} = 6,
-        Referrals: referrals::{Pallet, Call, Storage} = 7,
-        Rewards: rewards::{Pallet, Call, Config<T>, Storage, Event<T>} = 8,
-        XorFee: xor_fee::{Pallet, Call, Storage, Event<T>} = 9,
-        BridgeMultisig: bridge_multisig::{Pallet, Call, Storage, Config<T>, Event<T>} = 10,
-        Utility: pallet_utility::{Pallet, Call, Event} = 11,
-
-        // Consensus and staking.
-        Authorship: pallet_authorship::{Pallet, Call, Storage, Inherent} = 16,
-        Staking: pallet_staking::{Pallet, Call, Config<T>, Storage, Event<T>} = 17,
-        Offences: pallet_offences::{Pallet, Storage, Event} = 37,
-        Historical: pallet_session_historical::{Pallet} = 13,
-        Session: pallet_session::{Pallet, Call, Storage, Event, Config<T>} = 12,
-        Grandpa: pallet_grandpa::{Pallet, Call, Storage, Config, Event} = 15,
-        ImOnline: pallet_im_online::{Pallet, Call, Storage, Event<T>, ValidateUnsigned, Config<T>} = 36,
-
-        // Non-native tokens - everything apart of XOR.
-        Tokens: tokens::{Pallet, Storage, Config<T>, Event<T>} = 18,
-        // Unified interface for XOR and non-native tokens.
-        Currencies: currencies::{Pallet, Call} = 19,
-        TradingPair: trading_pair::{Pallet, Call, Storage, Config<T>, Event<T>} = 20,
-        Assets: assets::{Pallet, Call, Storage, Config<T>, Event<T>} = 21,
-        DEXManager: dex_manager::{Pallet, Storage, Config<T>} = 22,
-        MulticollateralBondingCurvePool: multicollateral_bonding_curve_pool::{Pallet, Call, Storage, Config<T>, Event<T>} = 23,
-        Technical: technical::{Pallet, Call, Config<T>, Event<T>, Storage} = 24,
-        PoolXYK: pool_xyk::{Pallet, Call, Storage, Event<T>} = 25,
-        LiquidityProxy: liquidity_proxy::{Pallet, Call, Event<T>} = 26,
-        Council: pallet_collective::<Instance1>::{Pallet, Call, Storage, Origin<T>, Event<T>, Config<T>} = 27,
-        TechnicalCommittee: pallet_collective::<Instance2>::{Pallet, Call, Storage, Origin<T>, Event<T>, Config<T>} = 28,
-        Democracy: pallet_democracy::{Pallet, Call, Storage, Config<T>, Event<T>} = 29,
-        DEXAPI: dex_api::{Pallet, Call, Storage, Config} = 30,
-        EthBridge: eth_bridge::{Pallet, Call, Storage, Config<T>, Event<T>} = 31,
-        PswapDistribution: pswap_distribution::{Pallet, Call, Storage, Config<T>, Event<T>} = 32,
-        Multisig: pallet_multisig::{Pallet, Call, Storage, Event<T>} = 33,
-        Scheduler: pallet_scheduler::{Pallet, Call, Storage, Event<T>} = 34,
-        IrohaMigration: iroha_migration::{Pallet, Call, Storage, Config<T>, Event<T>} = 35,
-        TechnicalMembership: pallet_membership::<Instance1>::{Pallet, Call, Storage, Event<T>, Config<T>} = 38,
-        ElectionsPhragmen: pallet_elections_phragmen::{Pallet, Call, Storage, Event<T>, Config<T>} = 39,
-        VestedRewards: vested_rewards::{Pallet, Call, Storage, Event<T>, Config} = 40,
-        Identity: pallet_identity::{Pallet, Call, Storage, Event<T>} = 41,
-        Farming: farming::{Pallet, Storage} = 42,
-        XSTPool: xst::{Pallet, Call, Storage, Config<T>, Event<T>} = 43,
-        PriceTools: price_tools::{Pallet, Storage, Event<T>} = 44,
-        CeresStaking: ceres_staking::{Pallet, Call, Storage, Event<T>} = 45,
-        CeresLiquidityLocker: ceres_liquidity_locker::{Pallet, Call, Storage, Event<T>} = 46,
-        CeresTokenLocker: ceres_token_locker::{Pallet, Call, Storage, Event<T>} = 47,
-        CeresGovernancePlatform: ceres_governance_platform::{Pallet, Call, Storage, Event<T>} = 48,
-        CeresLaunchpad: ceres_launchpad::{Pallet, Call, Storage, Event<T>} = 49,
-        DemeterFarmingPlatform: demeter_farming_platform::{Pallet, Call, Storage, Event<T>} = 50,
-        // Provides a semi-sorted list of nominators for staking.
-        BagsList: pallet_bags_list::{Pallet, Call, Storage, Event<T>} = 51,
-        ElectionProviderMultiPhase: pallet_election_provider_multi_phase::{Pallet, Call, Storage, Event<T>, ValidateUnsigned} = 52,
-        Band: band::{Pallet, Call, Storage, Event<T>} = 53,
-        OracleProxy: oracle_proxy::{Pallet, Call, Storage, Event<T>} = 54,
-        HermesGovernancePlatform: hermes_governance_platform::{Pallet, Call, Storage, Event<T>} = 55,
-
-
-        // Trustless ethereum bridge
-        Mmr: pallet_mmr::{Pallet, Storage} = 90,
-        Beefy: pallet_beefy::{Pallet, Config<T>, Storage} = 91,
-        MmrLeaf: pallet_beefy_mmr::{Pallet, Storage} = 92,
-        EthereumLightClient: ethereum_light_client::{Pallet, Call, Storage, Event<T>, Config} = 93,
-        BridgeInboundChannel: bridge_inbound_channel::{Pallet, Call, Config, Storage, Event<T>} = 96,
-        BridgeOutboundChannel: bridge_outbound_channel::{Pallet, Config<T>, Storage, Event<T>} = 97,
-        Dispatch: dispatch::<Instance1>::{Pallet, Storage, Event<T>, Origin<T>} = 98,
-        LeafProvider: leaf_provider::{Pallet, Storage, Event<T>} = 99,
-        EthApp: eth_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 100,
-        ERC20App: erc20_app::{Pallet, Call, Storage, Event<T>, Config<T>} = 101,
-        MigrationApp: migration_app::{Pallet, Call, Storage, Event<T>, Config} = 102,
-        EvmBridgeProxy: evm_bridge_proxy::{Pallet, Call, Storage, Event} = 103,
-
-        BeefyLightClient: beefy_light_client::{Pallet, Call, Storage, Event<T>, Config} = 104,
-        Preimage: pallet_preimage::{Pallet, Call, Storage, Event<T>} = 105,
-        SubstrateBridgeInboundChannel: substrate_bridge_channel::inbound::{Pallet, Call, Config, Storage, Event<T>} = 106,
-        SubstrateBridgeOutboundChannel: substrate_bridge_channel::outbound::{Pallet, Config<T>, Storage, Event<T>} = 107,
-        SubstrateDispatch: dispatch::<Instance2>::{Pallet, Storage, Event<T>, Origin<T>} = 108,
-        SubstrateBridgeApp: substrate_bridge_app::{Pallet, Config<T>, Storage, Event<T>, Call} = 109,
     }
 }
 
@@ -2384,6 +2382,7 @@ pub type Executive = frame_executive::Executive<
     migrations::Migrations,
 >;
 
+#[cfg(feature = "wip")] // Bridges
 pub type MmrHashing = <Runtime as pallet_mmr::Config>::Hashing;
 
 impl_runtime_apis! {
@@ -2480,6 +2479,14 @@ impl_runtime_apis! {
             };
             output
         }
+
+        fn query_weight_to_fee(weight: Weight) -> Balance {
+            TransactionPayment::weight_to_fee(weight)
+        }
+
+        fn query_length_to_fee(length: u32) -> Balance {
+            TransactionPayment::length_to_fee(length)
+        }
     }
 
     impl dex_manager_runtime_api::DEXManagerAPI<Block, DEXId> for Runtime {
@@ -2513,7 +2520,7 @@ impl_runtime_apis! {
                     &output_asset_id,
                     QuoteAmount::with_variant(swap_variant, desired_input_amount.into()),
                     true,
-                ).ok().map(|sa| dex_runtime_api::SwapOutcomeInfo::<Balance> { amount: sa.amount, fee: sa.fee})
+                ).ok().map(|(sa, _)| dex_runtime_api::SwapOutcomeInfo::<Balance> { amount: sa.amount, fee: sa.fee})
             }
             #[cfg(not(feature = "private-net"))]
             {
@@ -2714,6 +2721,7 @@ impl_runtime_apis! {
         }
     }
 
+    #[cfg(feature = "wip")] // Substrate bridge
     impl beefy_light_client_runtime_api::BeefyLightClientAPI<Block, beefy_light_client::BitField> for Runtime {
         fn get_random_bitfield(network_id: SubNetworkId, prior: beefy_light_client::BitField, num_of_validators: u32) -> beefy_light_client::BitField {
             let len = prior.len() as usize;
@@ -2751,7 +2759,7 @@ impl_runtime_apis! {
                 LiquiditySourceFilter::with_mode(dex_id, filter_mode, selected_source_types),
                 false,
                 true,
-            ).ok().map(|quote_info| liquidity_proxy_runtime_api::SwapOutcomeInfo::<Balance, AssetId> {
+            ).ok().map(|(quote_info, _)| liquidity_proxy_runtime_api::SwapOutcomeInfo::<Balance, AssetId> {
                 amount: quote_info.outcome.amount,
                 amount_without_impact: quote_info.amount_without_impact.unwrap_or(0),
                 fee: quote_info.outcome.fee,
@@ -2889,80 +2897,85 @@ impl_runtime_apis! {
         }
     }
 
-    impl beefy_primitives::BeefyApi<Block> for Runtime {
-        fn validator_set() -> Option<beefy_primitives::ValidatorSet<BeefyId>> {
-                Beefy::validator_set()
+    // For BEEFY gadget
+    impl sp_beefy::BeefyApi<Block> for Runtime {
+        fn validator_set() -> Option<sp_beefy::ValidatorSet<BeefyId>> {
+            #[cfg(not(feature = "wip"))]
+            return None;
+
+            #[cfg(feature = "wip")] // Bridges
+            Beefy::validator_set()
         }
     }
 
     impl mmr::MmrApi<Block, Hash, BlockNumber> for Runtime {
-        fn generate_proof(block_number: BlockNumber)
-            -> Result<(mmr::EncodableOpaqueLeaf, mmr::Proof<Hash>), mmr::Error>
-        {
-            Mmr::generate_batch_proof(vec![block_number])
-                .and_then(|(leaves, proof)| Ok((
-                    mmr::EncodableOpaqueLeaf::from_leaf(&leaves[0]),
-                    mmr::BatchProof::into_single_leaf_proof(proof)?
-                )))
-        }
-
-        fn verify_proof(leaf: mmr::EncodableOpaqueLeaf, proof: mmr::Proof<Hash>)
-            -> Result<(), mmr::Error>
-        {
-            pub type MmrLeaf = <<Runtime as pallet_mmr::Config>::LeafData as mmr::LeafDataProvider>::LeafData;
-            let leaf: MmrLeaf = leaf
-                .into_opaque_leaf()
-                .try_decode()
-                .ok_or(mmr::Error::Verify)?;
-            Mmr::verify_leaves(vec![leaf], mmr::Proof::into_batch_proof(proof))
-        }
-
-        fn verify_proof_stateless(
-            root: Hash,
-            leaf: mmr::EncodableOpaqueLeaf,
-            proof: mmr::Proof<Hash>
-        ) -> Result<(), mmr::Error> {
-            let node = mmr::DataOrHash::Data(leaf.into_opaque_leaf());
-            pallet_mmr::verify_leaves_proof::<MmrHashing, _>(root, vec![node], mmr::Proof::into_batch_proof(proof))
-        }
-
         fn mmr_root() -> Result<Hash, mmr::Error> {
+            #[cfg(not(feature = "wip"))]
+            return Err(mmr::Error::PalletNotIncluded);
+
+            #[cfg(feature = "wip")] // Bridges
             Ok(Mmr::mmr_root())
         }
 
-        fn generate_batch_proof(block_numbers: Vec<BlockNumber>)
-            -> Result<(Vec<mmr::EncodableOpaqueLeaf>, mmr::BatchProof<Hash>), mmr::Error>
-        {
-            Mmr::generate_batch_proof(block_numbers)
-                .map(|(leaves, proof)| (leaves.into_iter().map(|leaf| mmr::EncodableOpaqueLeaf::from_leaf(&leaf)).collect(), proof))
+        fn mmr_leaf_count() -> Result<mmr::LeafIndex, mmr::Error> {
+            #[cfg(not(feature = "wip"))]
+            return Err(mmr::Error::PalletNotIncluded);
+
+            #[cfg(feature = "wip")] // Bridges
+            Ok(Mmr::mmr_leaves())
         }
 
-        fn generate_historical_batch_proof(block_numbers: Vec<BlockNumber>,
-            best_known_block_number: BlockNumber)
-            -> Result<(Vec<mmr::EncodableOpaqueLeaf>, mmr::BatchProof<Hash>), mmr::Error>
-        {
-            Mmr::generate_historical_batch_proof(block_numbers, best_known_block_number)
-                .map(|(leaves, proof)| (leaves.into_iter().map(|leaf| mmr::EncodableOpaqueLeaf::from_leaf(&leaf)).collect(), proof))
+        fn generate_proof(
+            _block_numbers: Vec<BlockNumber>,
+            _best_known_block_number: Option<BlockNumber>,
+        ) -> Result<(Vec<mmr::EncodableOpaqueLeaf>, mmr::Proof<Hash>), mmr::Error> {
+            #[cfg(not(feature = "wip"))]
+            return Err(mmr::Error::PalletNotIncluded);
+
+            #[cfg(feature = "wip")] // Bridges
+            Mmr::generate_proof(_block_numbers, _best_known_block_number).map(
+                |(leaves, proof)| {
+                    (
+                        leaves
+                            .into_iter()
+                            .map(|leaf| mmr::EncodableOpaqueLeaf::from_leaf(&leaf))
+                            .collect(),
+                        proof,
+                    )
+                },
+            )
         }
 
-        fn verify_batch_proof(leaves: Vec<mmr::EncodableOpaqueLeaf>, proof: mmr::BatchProof<Hash>)
+        fn verify_proof(_leaves: Vec<mmr::EncodableOpaqueLeaf>, _proof: mmr::Proof<Hash>)
             -> Result<(), mmr::Error>
         {
-            pub type MmrLeaf = <<Runtime as pallet_mmr::Config>::LeafData as mmr::LeafDataProvider>::LeafData;
-            let leaves = leaves.into_iter().map(|leaf|
-                leaf.into_opaque_leaf()
-                .try_decode()
-                .ok_or(mmr::Error::Verify)).collect::<Result<Vec<MmrLeaf>, mmr::Error>>()?;
-            Mmr::verify_leaves(leaves, proof)
+            #[cfg(not(feature = "wip"))]
+            return Err(mmr::Error::PalletNotIncluded);
+
+            #[cfg(feature = "wip")] // Bridges
+            {
+                pub type MmrLeaf = <<Runtime as pallet_mmr::Config>::LeafData as mmr::LeafDataProvider>::LeafData;
+                let leaves = _leaves.into_iter().map(|leaf|
+                    leaf.into_opaque_leaf()
+                    .try_decode()
+                    .ok_or(mmr::Error::Verify)).collect::<Result<Vec<MmrLeaf>, mmr::Error>>()?;
+                Mmr::verify_leaves(leaves, _proof)
+            }
         }
 
-        fn verify_batch_proof_stateless(
-            root: Hash,
-            leaves: Vec<mmr::EncodableOpaqueLeaf>,
-            proof: mmr::BatchProof<Hash>
+        fn verify_proof_stateless(
+            _root: Hash,
+            _leaves: Vec<mmr::EncodableOpaqueLeaf>,
+            _proof: mmr::Proof<Hash>
         ) -> Result<(), mmr::Error> {
-            let nodes = leaves.into_iter().map(|leaf|mmr::DataOrHash::Data(leaf.into_opaque_leaf())).collect();
-            pallet_mmr::verify_leaves_proof::<MmrHashing, _>(root, nodes, proof)
+            #[cfg(not(feature = "wip"))]
+            return Err(mmr::Error::PalletNotIncluded);
+
+            #[cfg(feature = "wip")] // Bridges
+            {
+                let nodes = _leaves.into_iter().map(|leaf|mmr::DataOrHash::Data(leaf.into_opaque_leaf())).collect();
+                pallet_mmr::verify_leaves_proof::<MmrHashing, _>(_root, nodes, _proof)
+            }
         }
     }
 
@@ -3000,6 +3013,7 @@ impl_runtime_apis! {
         }
     }
 
+    #[cfg(feature = "wip")] // Bridges
     impl leaf_provider_runtime_api::LeafProviderAPI<Block> for Runtime {
         fn latest_digest() -> Option<bridge_types::types::AuxiliaryDigest> {
                 LeafProvider::latest_digest().map(|logs| bridge_types::types::AuxiliaryDigest{ logs })
@@ -3007,6 +3021,7 @@ impl_runtime_apis! {
 
     }
 
+    #[cfg(feature = "wip")] // Bridges
     impl evm_bridge_proxy_runtime_api::EvmBridgeProxyAPI<Block, AssetId> for Runtime {
         fn list_apps(network_id: bridge_types::EVMChainId) -> Vec<bridge_types::types::BridgeAppInfo> {
             EvmBridgeProxy::list_apps(network_id)
@@ -3030,6 +3045,8 @@ impl_runtime_apis! {
             use pool_xyk_benchmarking::Pallet as XYKPoolBench;
             use pswap_distribution_benchmarking::Pallet as PswapDistributionBench;
             use ceres_liquidity_locker_benchmarking::Pallet as CeresLiquidityLockerBench;
+            use demeter_farming_platform_benchmarking::Pallet as DemeterFarmingPlatformBench;
+            use xst_benchmarking::Pallet as XSTPoolBench;
 
             let mut list = Vec::<BenchmarkList>::new();
 
@@ -3048,15 +3065,36 @@ impl_runtime_apis! {
             list_benchmark!(list, extra, vested_rewards, VestedRewards);
             list_benchmark!(list, extra, price_tools, PriceTools);
             list_benchmark!(list, extra, xor_fee, XorFee);
-            list_benchmark!(list, extra, ethereum_light_client, EthereumLightClient);
             list_benchmark!(list, extra, referrals, Referrals);
             list_benchmark!(list, extra, ceres_staking, CeresStaking);
             list_benchmark!(list, extra, hermes_governance_platform, HermesGovernancePlatform);
             list_benchmark!(list, extra, ceres_liquidity_locker, CeresLiquidityLockerBench::<Runtime>);
-            list_benchmark!(list, extra, evm_bridge_proxy, EvmBridgeProxy);
+            list_benchmark!(list, extra, ceres_token_locker, CeresTokenLocker);
+            list_benchmark!(list, extra, ceres_governance_platform, CeresGovernancePlatform);
+            list_benchmark!(list, extra, ceres_launchpad, CeresLaunchpad);
+            list_benchmark!(list, extra, demeter_farming_platform, DemeterFarmingPlatformBench::<Runtime>);
             list_benchmark!(list, extra, band, Band);
-            list_benchmark!(list, extra, xst, XSTPool);
+            list_benchmark!(list, extra, xst, XSTPoolBench::<Runtime>);
             list_benchmark!(list, extra, oracle_proxy, OracleProxy);
+
+            #[cfg(feature = "wip")] // order-book
+            list_benchmark!(list, extra, order_book, OrderBook);
+
+            // Trustless bridge
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, ethereum_light_client, EthereumLightClient);
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, bridge_inbound_channel, BridgeInboundChannel);
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, bridge_outbound_channel, BridgeOutboundChannel);
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, eth_app, EthApp);
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, erc20_app, ERC20App);
+            #[cfg(feature = "wip")] // EVM bridge
+            list_benchmark!(list, extra, migration_app, MigrationApp);
+            #[cfg(feature = "wip")] // Bridges
+            list_benchmark!(list, extra, evm_bridge_proxy, EvmBridgeProxy);
 
             let storage_info = AllPalletsWithSystem::storage_info();
 
@@ -3073,11 +3111,13 @@ impl_runtime_apis! {
             use pswap_distribution_benchmarking::Pallet as PswapDistributionBench;
             use ceres_liquidity_locker_benchmarking::Pallet as CeresLiquidityLockerBench;
             use demeter_farming_platform_benchmarking::Pallet as DemeterFarmingPlatformBench;
+            use xst_benchmarking::Pallet as XSTPoolBench;
 
             impl liquidity_proxy_benchmarking::Config for Runtime {}
             impl pool_xyk_benchmarking::Config for Runtime {}
             impl pswap_distribution_benchmarking::Config for Runtime {}
             impl ceres_liquidity_locker_benchmarking::Config for Runtime {}
+            impl xst_benchmarking::Config for Runtime {}
 
             let whitelist: Vec<TrackedStorageKey> = vec![
                 // Block Number
@@ -3111,7 +3151,6 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, eth_bridge, EthBridge);
             add_benchmark!(params, batches, vested_rewards, VestedRewards);
             add_benchmark!(params, batches, price_tools, PriceTools);
-            add_benchmark!(params, batches, ethereum_light_client, EthereumLightClient);
             add_benchmark!(params, batches, xor_fee, XorFee);
             add_benchmark!(params, batches, referrals, Referrals);
             add_benchmark!(params, batches, ceres_staking, CeresStaking);
@@ -3120,37 +3159,51 @@ impl_runtime_apis! {
             add_benchmark!(params, batches, ceres_governance_platform, CeresGovernancePlatform);
             add_benchmark!(params, batches, ceres_launchpad, CeresLaunchpad);
             add_benchmark!(params, batches, demeter_farming_platform, DemeterFarmingPlatformBench::<Runtime>);
-            add_benchmark!(params, batches, evm_bridge_proxy, EvmBridgeProxy);
             add_benchmark!(params, batches, band, Band);
-            add_benchmark!(params, batches, xst, XSTPool);
+            add_benchmark!(params, batches, xst, XSTPoolBench::<Runtime>);
             add_benchmark!(params, batches, hermes_governance_platform, HermesGovernancePlatform);
             add_benchmark!(params, batches, oracle_proxy, OracleProxy);
+
+            #[cfg(feature = "wip")] // order-book
+            add_benchmark!(params, batches, order_book, OrderBook);
+
+            // Trustless bridge
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, ethereum_light_client, EthereumLightClient);
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, bridge_inbound_channel, BridgeInboundChannel);
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, bridge_outbound_channel, BridgeOutboundChannel);
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, eth_app, EthApp);
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, erc20_app, ERC20App);
+            #[cfg(feature = "wip")] // EVM bridge
+            add_benchmark!(params, batches, migration_app, MigrationApp);
+            #[cfg(feature = "wip")] // Bridges
+            add_benchmark!(params, batches, evm_bridge_proxy, EvmBridgeProxy);
 
             if batches.is_empty() { return Err("Benchmark not found for this pallet.".into()) }
             Ok(batches)
         }
     }
 
-    impl vested_rewards_runtime_api::VestedRewardsApi<Block, AccountId, AssetId, Balance> for Runtime {
-        fn crowdloan_claimable(account_id: AccountId, asset_id: AssetId) -> Option<vested_rewards_runtime_api::BalanceInfo<Balance>> {
-            use sp_runtime::traits::UniqueSaturatedInto;
-
-            let current_block_num = <frame_system::Pallet<Runtime>>::block_number().unique_saturated_into();
-            VestedRewards::crowdloan_reward_for_asset(&account_id, &asset_id, current_block_num).ok().map(|balance|
-                vested_rewards_runtime_api::BalanceInfo::<Balance> {
-                    balance
-                }
-            )
+    impl vested_rewards_runtime_api::VestedRewardsApi<Block, AccountId, AssetId, Balance, CrowdloanTag> for Runtime {
+        fn crowdloan_claimable(tag: CrowdloanTag, account_id: AccountId, asset_id: AssetId) -> Option<vested_rewards_runtime_api::BalanceInfo<Balance>> {
+            let balance = VestedRewards::get_claimable_crowdloan_reward(&tag, &account_id, &asset_id)?;
+            Some(vested_rewards_runtime_api::BalanceInfo::<Balance> {
+                balance
+            })
         }
 
-        fn crowdloan_lease() -> vested_rewards_runtime_api::CrowdloanLease {
-            use vested_rewards::{LEASE_START_BLOCK, LEASE_TOTAL_DAYS, BLOCKS_PER_DAY};
+        fn crowdloan_lease(tag: CrowdloanTag) -> Option<vested_rewards_runtime_api::CrowdloanLease> {
+            let crowdloan_info = vested_rewards::CrowdloanInfos::<Runtime>::get(&tag)?;
 
-            vested_rewards_runtime_api::CrowdloanLease {
-                start_block: LEASE_START_BLOCK,
-                total_days: LEASE_TOTAL_DAYS,
-                blocks_per_day: BLOCKS_PER_DAY,
-            }
+            Some(vested_rewards_runtime_api::CrowdloanLease {
+                start_block: crowdloan_info.start_block as u128,
+                total_days: crowdloan_info.length as u128 / DAYS as u128,
+                blocks_per_day: DAYS as u128,
+            })
         }
     }
 
@@ -3162,21 +3215,21 @@ impl_runtime_apis! {
 
     #[cfg(feature = "try-runtime")]
     impl frame_try_runtime::TryRuntime<Block> for Runtime {
-        fn on_runtime_upgrade() -> (Weight, Weight) {
-            log::info!("try-runtime::on_runtime_upgrade.");
-            let weight = Executive::try_runtime_upgrade().unwrap();
+        fn on_runtime_upgrade(checks: frame_try_runtime::UpgradeCheckSelect) -> (Weight, Weight) {
+            log::info!("try-runtime::on_runtime_upgrade");
+            let weight = Executive::try_runtime_upgrade(checks).unwrap();
             (weight, BlockWeights::get().max_block)
         }
 
-        fn execute_block(block: Block, state_root_check: bool, select: frame_try_runtime::TryStateSelect) -> Weight {
-            log::info!(
-                target: "runtime", "try-runtime: executing block #{} ({:?}) / root checks: {:?} / sanity-checks: {:?}",
-                block.header.number,
-                block.header.hash(),
-                state_root_check,
-                select,
-            );
-            Executive::try_execute_block(block, state_root_check, select).expect("try_execute_block failed")
+        fn execute_block(
+            block: Block,
+            state_root_check: bool,
+            signature_check: bool,
+            select: frame_try_runtime::TryStateSelect,
+        ) -> Weight {
+            // NOTE: intentional unwrap: we don't want to propagate the error backwards, and want to
+            // have a backtrace here.
+            Executive::try_execute_block(block, state_root_check, signature_check, select).unwrap()
         }
     }
 }

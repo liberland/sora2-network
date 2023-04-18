@@ -7,9 +7,9 @@ use common::Balance;
 use futures::Stream;
 use futures::StreamExt;
 
-use crate::relay::simplified_proof::convert_to_simplified_mmr_proof;
-use crate::substrate::{binary_search_first_occurence, BlockHash, LeafProof};
+use crate::substrate::{binary_search_first_occurence, LeafProof};
 use crate::{prelude::*, substrate::BlockNumber};
+use bridge_common::simplified_proof::convert_to_simplified_mmr_proof;
 use sp_runtime::traits::{Keccak256, UniqueSaturatedInto};
 
 pub enum MessageCommitment {
@@ -34,7 +34,7 @@ pub struct MessageCommitmentWithProof<S: SenderConfig> {
     pub commitment: MessageCommitment,
     pub digest: AuxiliaryDigest,
     pub leaf: bridge_common::beefy_types::BeefyMMRLeaf,
-    pub proof: bridge_common::simplified_mmr_proof::SimplifiedMMRProof,
+    pub proof: bridge_common::simplified_proof::Proof<H256>,
 }
 
 pub async fn load_commitment_with_proof<S: SenderConfig>(
@@ -51,7 +51,6 @@ pub async fn load_commitment_with_proof<S: SenderConfig>(
             .await?
             .into(),
     };
-    let latest_sent_hash = sender.block_hash(latest_beefy_block).await?;
     let block_hash = sender.block_hash(block_number).await?;
     let digest = sender.auxiliary_digest(Some(block_hash)).await?;
     if digest.logs.is_empty() {
@@ -82,7 +81,7 @@ pub async fn load_commitment_with_proof<S: SenderConfig>(
         digest_hash,
         block_number,
         50,
-        Some(latest_sent_hash),
+        latest_beefy_block.into(),
     )
     .await?;
     let leaf = leaf_proof.leaf;
@@ -99,11 +98,8 @@ pub async fn load_commitment_with_proof<S: SenderConfig>(
     };
     trace!("Leaf: {:?}", ready_leaf);
 
-    let proof = convert_to_simplified_mmr_proof(proof.leaf_index, proof.leaf_count, &proof.items);
-    let proof = bridge_common::simplified_mmr_proof::SimplifiedMMRProof {
-        merkle_proof_items: proof.items,
-        merkle_proof_order_bit_field: proof.order,
-    };
+    let proof =
+        convert_to_simplified_mmr_proof(proof.leaf_indices[0], proof.leaf_count, &proof.items);
 
     Ok(MessageCommitmentWithProof {
         commitment,
@@ -119,7 +115,7 @@ async fn leaf_proof_with_digest<S: SenderConfig>(
     digest_hash: H256,
     start_leaf: BlockNumber<S>,
     count: u32,
-    at: Option<BlockHash<S>>,
+    at: BlockNumber<S>,
 ) -> AnyResult<LeafProof<S>> {
     for i in 0..count {
         let leaf = start_leaf + i.into();

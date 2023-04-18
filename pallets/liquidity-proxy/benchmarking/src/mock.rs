@@ -34,11 +34,13 @@ use crate::{Config, *};
 use common::mock::ExistentialDeposits;
 use common::prelude::{Balance, QuoteAmount};
 use common::{
-    fixed, fixed_from_basis_points, hash, Amount, AssetId32, BalancePrecision, ContentSource,
-    DEXInfo, Description, Fixed, FromGenericPair, LiquidityProxyTrait, LiquiditySourceFilter,
-    LiquiditySourceType, PriceToolsPallet, TechPurpose, DEFAULT_BALANCE_PRECISION, XST,
+    balance, fixed, fixed_from_basis_points, hash, Amount, AssetId32, AssetName, AssetSymbol,
+    BalancePrecision, ContentSource, DEXInfo, Description, Fixed, FromGenericPair,
+    LiquidityProxyTrait, LiquiditySourceFilter, LiquiditySourceType, PriceToolsPallet,
+    PriceVariant, TechPurpose, DEFAULT_BALANCE_PRECISION, DOT, PSWAP, USDT, VAL, XOR, XST,
 };
 use currencies::BasicCurrencyAdapter;
+use hex_literal::hex;
 
 use frame_support::traits::{Everything, GenesisBuild};
 use frame_support::{construct_runtime, parameter_types};
@@ -91,12 +93,13 @@ parameter_types! {
     pub GetPswapDistributionAccountId: AccountId = AccountId32::from([3; 32]);
     pub const GetDefaultSubscriptionFrequency: BlockNumber = 10;
     pub const GetBurnUpdateFrequency: BlockNumber = 10;
-    pub GetIncentiveAssetId: AssetId = common::PSWAP.into();
+    pub GetIncentiveAssetId: AssetId = PSWAP.into();
     pub GetParliamentAccountId: AccountId = AccountId32::from([8; 32]);
     pub GetMarketMakerRewardsAccountId: AccountId = AccountId32::from([9; 32]);
     pub GetBondingCurveRewardsAccountId: AccountId = AccountId32::from([10; 32]);
     pub GetFarmingRewardsAccountId: AccountId = AccountId32::from([12; 32]);
     pub GetCrowdloanRewardsAccountId: AccountId = AccountId32::from([13; 32]);
+    pub GetADARAccountId: AccountId = AccountId32::from([14; 32]);
     pub GetXykFee: Fixed = fixed!(0.003);
     pub const MinimumPeriod: u64 = 5;
 }
@@ -166,6 +169,7 @@ impl liquidity_proxy::Config for Runtime {
     type PrimaryMarketXST = ();
     type SecondaryMarket = ();
     type VestedRewardsPallet = vested_rewards::Pallet<Runtime>;
+    type GetADARAccountId = GetADARAccountId;
 }
 
 impl tokens::Config for Runtime {
@@ -175,15 +179,10 @@ impl tokens::Config for Runtime {
     type CurrencyId = <Runtime as assets::Config>::AssetId;
     type WeightInfo = ();
     type ExistentialDeposits = ExistentialDeposits;
-    type OnDust = ();
+    type CurrencyHooks = ();
     type MaxLocks = ();
     type MaxReserves = ();
     type ReserveIdentifier = ();
-    type OnNewTokenAccount = ();
-    type OnKilledTokenAccount = ();
-    type OnSlash = ();
-    type OnDeposit = ();
-    type OnTransfer = ();
     type DustRemovalWhitelist = Everything;
 }
 
@@ -202,6 +201,7 @@ parameter_types! {
             "0000000000000000000000000000000000000000000000000000000000000023"
     ));
     pub const GetBuyBackDexId: DEXId = 0;
+    pub GetTBCBuyBackXSTPercent: Fixed = fixed!(0.025);
 }
 
 impl assets::Config for Runtime {
@@ -286,7 +286,6 @@ impl dex_api::Config for Runtime {
     type XYKPool = pool_xyk::Pallet<Runtime>;
     type XSTPool = ();
     type MulticollateralBondingCurvePool = multicollateral_bonding_curve_pool::Pallet<Runtime>;
-    type WeightInfo = ();
 }
 
 impl trading_pair::Config for Runtime {
@@ -319,11 +318,11 @@ impl pool_xyk::Config for Runtime {
 }
 
 impl vested_rewards::Config for Runtime {
+    const BLOCKS_PER_DAY: BlockNumberFor<Self> = 14400;
     type RuntimeEvent = RuntimeEvent;
     type GetMarketMakerRewardsAccountId = GetMarketMakerRewardsAccountId;
     type GetBondingCurveRewardsAccountId = GetBondingCurveRewardsAccountId;
     type GetFarmingRewardsAccountId = GetFarmingRewardsAccountId;
-    type GetCrowdloanRewardsAccountId = GetCrowdloanRewardsAccountId;
     type WeightInfo = ();
 }
 
@@ -359,8 +358,6 @@ fn bonding_curve_distribution_accounts() -> DistributionAccounts<
     let projects_coefficient = fixed_wrapper!(1) - val_holders_coefficient;
     let projects_sora_citizens_coeff = projects_coefficient.clone() * fixed_wrapper!(0.01);
     let projects_stores_and_shops_coeff = projects_coefficient.clone() * fixed_wrapper!(0.04);
-    let projects_parliament_and_development_coeff =
-        projects_coefficient.clone() * fixed_wrapper!(0.05);
     let projects_other_coeff = projects_coefficient.clone() * fixed_wrapper!(0.9);
 
     let xor_allocation = DistributionAccountData::new(
@@ -384,12 +381,6 @@ fn bonding_curve_distribution_accounts() -> DistributionAccounts<
         )),
         projects_stores_and_shops_coeff.get().unwrap(),
     );
-    let parliament_and_development = DistributionAccountData::new(
-        DistributionAccount::Account(
-            hex!("881b87c9f83664b95bd13e2bb40675bfa186287da93becc0b22683334d411e4e").into(),
-        ),
-        projects_parliament_and_development_coeff.get().unwrap(),
-    );
     let projects = DistributionAccountData::new(
         DistributionAccount::TechAccount(TechAccountId::Pure(
             0u32,
@@ -408,7 +399,6 @@ fn bonding_curve_distribution_accounts() -> DistributionAccounts<
         xor_allocation,
         sora_citizens,
         stores_and_shops,
-        parliament_and_development,
         projects,
         val_holders,
     }
@@ -494,6 +484,8 @@ impl multicollateral_bonding_curve_pool::Config for Runtime {
     type EnsureTradingPairExists = trading_pair::Pallet<Runtime>;
     type PriceToolsPallet = MockPriceTools;
     type VestedRewardsPallet = VestedRewards;
+    type BuyBackHandler = liquidity_proxy::LiquidityProxyBuyBackHandler<Runtime, GetBuyBackDexId>;
+    type BuyBackXSTPercent = GetTBCBuyBackXSTPercent;
     type WeightInfo = ();
 }
 
@@ -501,6 +493,7 @@ impl pswap_distribution::Config for Runtime {
     const PSWAP_BURN_PERCENT: Percent = Percent::from_percent(3);
     type RuntimeEvent = RuntimeEvent;
     type GetIncentiveAssetId = GetIncentiveAssetId;
+    type GetXSTAssetId = GetBuyBackAssetId;
     type LiquidityProxy = liquidity_proxy::Pallet<Runtime>;
     type CompatBalance = Balance;
     type GetDefaultSubscriptionFrequency = GetDefaultSubscriptionFrequency;
@@ -511,6 +504,7 @@ impl pswap_distribution::Config for Runtime {
     type WeightInfo = ();
     type GetParliamentAccountId = GetParliamentAccountId;
     type PoolXykPallet = PoolXYK;
+    type BuyBackHandler = ();
 }
 
 impl price_tools::Config for Runtime {
@@ -585,7 +579,7 @@ impl Default for ExtBuilder {
             ],
             endowed_assets: vec![
                 (
-                    common::XOR.into(),
+                    XOR.into(),
                     alice(),
                     AssetSymbol(b"XOR".to_vec()),
                     AssetName(b"SORA".to_vec()),
@@ -596,7 +590,7 @@ impl Default for ExtBuilder {
                     None,
                 ),
                 (
-                    common::DOT.into(),
+                    DOT.into(),
                     alice(),
                     AssetSymbol(b"DOT".to_vec()),
                     AssetName(b"DOT".to_vec()),
@@ -607,7 +601,7 @@ impl Default for ExtBuilder {
                     None,
                 ),
                 (
-                    common::VAL.into(),
+                    VAL.into(),
                     alice(),
                     AssetSymbol(b"VAL".to_vec()),
                     AssetName(b"VAL".to_vec()),
@@ -618,7 +612,7 @@ impl Default for ExtBuilder {
                     None,
                 ),
                 (
-                    common::USDT.into(),
+                    USDT.into(),
                     alice(),
                     AssetSymbol(b"USDT".to_vec()),
                     AssetName(b"USDT".to_vec()),
@@ -629,7 +623,7 @@ impl Default for ExtBuilder {
                     None,
                 ),
                 (
-                    common::PSWAP.into(),
+                    PSWAP.into(),
                     alice(),
                     AssetSymbol(b"PSWAP".to_vec()),
                     AssetName(b"PSWAP".to_vec()),

@@ -30,9 +30,10 @@
 
 use crate::traits::{IsRepresentation, PureOrWrapped};
 use codec::{Decode, Encode, MaxEncodedLen};
-use core::fmt::Debug;
+use core::{fmt::Debug, str::FromStr};
 use frame_support::dispatch::{DispatchError, TypeInfo};
-use frame_support::{ensure, RuntimeDebug};
+use frame_support::traits::ConstU32;
+use frame_support::{ensure, BoundedVec, RuntimeDebug};
 use hex_literal::hex;
 use sp_core::H256;
 use sp_std::convert::TryFrom;
@@ -46,7 +47,6 @@ use {
     serde::{Deserialize, Serialize},
     sp_std::convert::TryInto,
     sp_std::fmt::Display,
-    sp_std::str::FromStr,
     static_assertions::_core::fmt::Formatter,
 };
 
@@ -100,6 +100,7 @@ pub struct DEXInfo<AssetId> {
     RuntimeDebug,
     Hash,
     scale_info::TypeInfo,
+    MaxEncodedLen,
 )]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct TradingPair<AssetId> {
@@ -270,6 +271,24 @@ impl<AssetId> AssetId32<AssetId> {
         bytes[2] = asset_id as u8;
         Self::from_bytes(bytes)
     }
+
+    /// Construct asset id for synthetic asset using its `reference_symbol`
+    pub fn from_synthetic_reference_symbol<Symbol>(reference_symbol: &Symbol) -> Self
+    where
+        Symbol: From<SymbolName> + PartialEq + Encode,
+    {
+        if *reference_symbol == SymbolName::usd().into() {
+            return Self::from_asset_id(PredefinedAssetId::XSTUSD);
+        }
+
+        let mut bytes = [0u8; 32];
+        let symbol_bytes = reference_symbol.encode();
+        let symbol_hash = sp_io::hashing::blake2_128(&symbol_bytes);
+        bytes[0] = 3;
+        bytes[2..18].copy_from_slice(&symbol_hash);
+
+        Self::from_bytes(bytes)
+    }
 }
 
 impl<AssetId> From<H256> for AssetId32<AssetId> {
@@ -322,7 +341,17 @@ where
 
 /// DEX identifier.
 #[derive(
-    Encode, Decode, Eq, PartialEq, Copy, Clone, PartialOrd, Ord, RuntimeDebug, scale_info::TypeInfo,
+    Encode,
+    Decode,
+    Eq,
+    PartialEq,
+    Copy,
+    Clone,
+    PartialOrd,
+    Ord,
+    RuntimeDebug,
+    scale_info::TypeInfo,
+    MaxEncodedLen,
 )]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize, Hash))]
 #[repr(u8)]
@@ -518,7 +547,12 @@ impl IsValid for Description {
 #[cfg_attr(feature = "std", derive(Hash))]
 pub struct SymbolName(pub Vec<u8>);
 
-#[cfg(feature = "std")]
+impl SymbolName {
+    pub fn usd() -> Self {
+        Self::from_str("USD").expect("`USD` is a valid symbol name")
+    }
+}
+
 impl FromStr for SymbolName {
     type Err = &'static str;
 
@@ -551,6 +585,49 @@ impl IsValid for SymbolName {
                 .0
                 .iter()
                 .all(|byte| (b'A'..=b'Z').contains(&byte) || (b'0'..=b'9').contains(&byte))
+    }
+}
+
+const CROWDLOAN_TAG_MAX_LENGTH: u32 = 128;
+
+#[derive(
+    Encode, Decode, Eq, PartialEq, Clone, Ord, PartialOrd, RuntimeDebug, scale_info::TypeInfo,
+)]
+pub struct CrowdloanTag(pub BoundedVec<u8, ConstU32<CROWDLOAN_TAG_MAX_LENGTH>>);
+
+#[cfg(feature = "std")]
+impl FromStr for CrowdloanTag {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let chars = s
+            .chars()
+            .map(|un| un as u8)
+            .collect::<Vec<_>>()
+            .try_into()
+            .map_err(|_| "CrowdloanTag length out of bounds")?;
+        Ok(CrowdloanTag(chars))
+    }
+}
+
+#[cfg(feature = "std")]
+impl Display for CrowdloanTag {
+    fn fmt(&self, f: &mut Formatter<'_>) -> sp_std::fmt::Result {
+        let s: String = self.0.iter().map(|un| *un as char).collect();
+        write!(f, "{}", s)
+    }
+}
+
+impl Default for CrowdloanTag {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+
+impl IsValid for CrowdloanTag {
+    /// Same as for AssetSymbol
+    fn is_valid(&self) -> bool {
+        !self.0.is_empty() && self.0.is_ascii()
     }
 }
 
@@ -587,7 +664,17 @@ impl<AssetId> From<AssetId> for TechAssetId<AssetId> {
 
 /// Enumaration of all available liquidity sources.
 #[derive(
-    Encode, Decode, RuntimeDebug, PartialEq, Eq, Copy, Clone, PartialOrd, Ord, scale_info::TypeInfo,
+    Encode,
+    Decode,
+    RuntimeDebug,
+    PartialEq,
+    Eq,
+    Copy,
+    Clone,
+    PartialOrd,
+    Ord,
+    scale_info::TypeInfo,
+    MaxEncodedLen,
 )]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 #[repr(u8)]
@@ -915,7 +1002,7 @@ impl Default for RewardReason {
 #[derive(Encode, Decode, Clone, RuntimeDebug, Default, scale_info::TypeInfo)]
 pub struct PswapRemintInfo {
     pub liquidity_providers: Balance,
-    pub parliament: Balance,
+    pub buy_back_xst: Balance,
     pub vesting: Balance,
 }
 
@@ -963,7 +1050,9 @@ mod tests {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(
+    Encode, Decode, PartialEq, Eq, Copy, Clone, RuntimeDebug, scale_info::TypeInfo, MaxEncodedLen,
+)]
 pub enum PriceVariant {
     Buy,
     Sell,

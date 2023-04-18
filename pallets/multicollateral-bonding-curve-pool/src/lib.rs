@@ -49,10 +49,11 @@ use common::prelude::{
     Balance, EnsureDEXManager, EnsureTradingPairExists, Fixed, FixedWrapper, PriceToolsPallet,
     QuoteAmount, SwapAmount, SwapOutcome,
 };
+use common::BuyBackHandler;
 use common::{
-    balance, fixed, fixed_wrapper, DEXId, DexIdOf, GetMarketInfo, LiquidityProxyTrait,
-    LiquiditySource, LiquiditySourceFilter, LiquiditySourceType, ManagementMode, PriceVariant,
-    RewardReason, VestedRewardsPallet, PSWAP, TBCD, VAL, XOR, XST,
+    balance, fixed, fixed_wrapper, AssetInfoProvider, DEXId, DexIdOf, GetMarketInfo,
+    LiquidityProxyTrait, LiquiditySource, LiquiditySourceFilter, LiquiditySourceType,
+    ManagementMode, PriceVariant, RewardReason, VestedRewardsPallet, PSWAP, TBCD, VAL, XOR, XST,
 };
 use frame_support::traits::Get;
 use frame_support::weights::Weight;
@@ -77,6 +78,10 @@ pub trait WeightInfo {
     fn set_optional_reward_multiplier() -> Weight;
     fn set_price_change_config() -> Weight;
     fn set_price_bias() -> Weight;
+    fn quote() -> Weight;
+    fn exchange() -> Weight;
+    fn can_exchange() -> Weight;
+    fn check_rewards() -> Weight;
 }
 
 type Assets<T> = assets::Pallet<T>;
@@ -91,7 +96,7 @@ pub const RETRY_DISTRIBUTION_FREQUENCY: u32 = 1000;
 
 pub use pallet::*;
 
-#[derive(Debug, Encode, Decode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Encode, Decode, Clone, PartialEq, scale_info::TypeInfo)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub enum DistributionAccount<AccountId, TechAccountId> {
     Account(AccountId),
@@ -104,7 +109,7 @@ impl<AccountId, TechAccountId: Default> Default for DistributionAccount<AccountI
     }
 }
 
-#[derive(Debug, Encode, Decode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Encode, Decode, Clone, PartialEq, scale_info::TypeInfo)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct DistributionAccountData<DistributionAccount> {
     pub account: DistributionAccount,
@@ -129,14 +134,13 @@ impl<DistributionAccount> DistributionAccountData<DistributionAccount> {
     }
 }
 
-#[derive(Debug, Encode, Decode, Clone, scale_info::TypeInfo)]
+#[derive(Debug, Encode, Decode, Clone, PartialEq, scale_info::TypeInfo)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct DistributionAccounts<DistributionAccountData> {
     pub xor_allocation: DistributionAccountData,
     pub val_holders: DistributionAccountData,
     pub sora_citizens: DistributionAccountData,
     pub stores_and_shops: DistributionAccountData,
-    pub parliament_and_development: DistributionAccountData,
     pub projects: DistributionAccountData,
 }
 
@@ -145,33 +149,26 @@ impl<AccountId, TechAccountId>
 {
     pub fn xor_distribution_as_array(
         &self,
-    ) -> [&DistributionAccountData<DistributionAccount<AccountId, TechAccountId>>; 4] {
-        [
-            &self.sora_citizens,
-            &self.stores_and_shops,
-            &self.parliament_and_development,
-            &self.projects,
-        ]
+    ) -> [&DistributionAccountData<DistributionAccount<AccountId, TechAccountId>>; 3] {
+        [&self.sora_citizens, &self.stores_and_shops, &self.projects]
     }
 
     pub fn xor_distribution_accounts_as_array(
         &self,
-    ) -> [&DistributionAccount<AccountId, TechAccountId>; 4] {
+    ) -> [&DistributionAccount<AccountId, TechAccountId>; 3] {
         [
             &self.sora_citizens.account,
             &self.stores_and_shops.account,
-            &self.parliament_and_development.account,
             &self.projects.account,
         ]
     }
 
-    pub fn accounts(&self) -> [&DistributionAccount<AccountId, TechAccountId>; 6] {
+    pub fn accounts(&self) -> [&DistributionAccount<AccountId, TechAccountId>; 5] {
         [
             &self.xor_allocation.account,
             &self.val_holders.account,
             &self.sora_citizens.account,
             &self.stores_and_shops.account,
-            &self.parliament_and_development.account,
             &self.projects.account,
         ]
     }
@@ -184,7 +181,6 @@ impl<DistributionAccountData: Default> Default for DistributionAccounts<Distribu
             val_holders: Default::default(),
             sora_citizens: Default::default(),
             stores_and_shops: Default::default(),
-            parliament_and_development: Default::default(),
             projects: Default::default(),
         }
     }
@@ -199,6 +195,7 @@ pub mod pallet {
     use frame_system::ensure_root;
     use frame_system::pallet_prelude::*;
 
+    // TODO: #395 use AssetInfoProvider instead of assets pallet
     #[pallet::config]
     pub trait Config:
         frame_system::Config
@@ -218,12 +215,14 @@ pub mod pallet {
         >;
         type PriceToolsPallet: PriceToolsPallet<Self::AssetId>;
         type VestedRewardsPallet: VestedRewardsPallet<Self::AccountId, Self::AssetId>;
+        type BuyBackHandler: BuyBackHandler<Self::AccountId, Self::AssetId>;
+        type BuyBackXSTPercent: Get<Fixed>;
         /// Weight information for extrinsics in this pallet.
         type WeightInfo: WeightInfo;
     }
 
     /// The current storage version.
-    const STORAGE_VERSION: StorageVersion = StorageVersion::new(2);
+    const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
     #[pallet::pallet]
     #[pallet::generate_store(pub(super) trait Store)]
@@ -246,6 +245,7 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         /// Enable exchange path on the pool for pair BaseAsset-CollateralAsset.
+        #[pallet::call_index(0)]
         #[pallet::weight(<T as Config>::WeightInfo::initialize_pool())]
         pub fn initialize_pool(
             origin: OriginFor<T>,
@@ -261,6 +261,7 @@ pub mod pallet {
         }
 
         /// Change reference asset which is used to determine collateral assets value. Inteded to be e.g. stablecoin DAI.
+        #[pallet::call_index(1)]
         #[pallet::weight(<T as Config>::WeightInfo::set_reference_asset())]
         pub fn set_reference_asset(
             origin: OriginFor<T>,
@@ -278,6 +279,7 @@ pub mod pallet {
 
         /// Set multiplier which is applied to rewarded amount when depositing particular collateral assets.
         /// `None` value indicates reward without change, same as Some(1.0).
+        #[pallet::call_index(2)]
         #[pallet::weight(<T as Config>::WeightInfo::set_optional_reward_multiplier())]
         pub fn set_optional_reward_multiplier(
             origin: OriginFor<T>,
@@ -305,6 +307,7 @@ pub mod pallet {
         }
 
         /// Changes `initial_price` used as bias in XOR-DAI(reference asset) price calculation
+        #[pallet::call_index(3)]
         #[pallet::weight(< T as Config >::WeightInfo::set_price_bias())]
         pub fn set_price_bias(
             origin: OriginFor<T>,
@@ -323,6 +326,7 @@ pub mod pallet {
         }
 
         /// Changes price change rate and step
+        #[pallet::call_index(4)]
         #[pallet::weight(< T as Config >::WeightInfo::set_price_change_config())]
         pub fn set_price_change_config(
             origin: OriginFor<T>,
@@ -827,20 +831,25 @@ impl<T: Config> Pallet<T> {
                 Assets::<T>::mint_to(&base_asset_id, &holder, &account, amount)?;
                 undistributed_xor_amount = undistributed_xor_amount.saturating_sub(amount);
             }
-            Assets::<T>::mint_to(&base_asset_id, &holder, &holder, undistributed_xor_amount)?;
+
+            let amount = fw_swapped_xor_amount * T::BuyBackXSTPercent::get();
+            let amount = amount
+                .try_into_balance()
+                .map_err(|_| Error::<T>::PriceCalculationFailed)?;
+            undistributed_xor_amount = undistributed_xor_amount.saturating_sub(amount);
+            T::BuyBackHandler::mint_buy_back_and_burn(&base_asset_id, &XST.into(), amount)?;
+
             // undistributed_xor_amount includes xor_allocation and val_holders portions
-            let val_amount = <T as pallet::Config>::LiquidityProxy::exchange(
-                DEXId::Polkaswap.into(),
-                holder,
-                holder,
+            T::BuyBackHandler::mint_buy_back_and_burn(
                 &base_asset_id,
                 &VAL.into(),
-                SwapAmount::with_desired_input(undistributed_xor_amount, Balance::zero()),
-                Pallet::<T>::self_excluding_filter(),
-            )?
-            .amount;
-            Assets::<T>::burn_from(&VAL.into(), holder, holder, val_amount)?;
+                undistributed_xor_amount,
+            )?;
             Ok(())
+        })
+        .map_err(|err| {
+            frame_support::log::error!("Reserves distribution failed, will try next time: {err:?}");
+            err
         })
     }
 
@@ -1563,7 +1572,7 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
         output_asset_id: &T::AssetId,
         amount: QuoteAmount<Balance>,
         deduce_fee: bool,
-    ) -> Result<SwapOutcome<Balance>, DispatchError> {
+    ) -> Result<(SwapOutcome<Balance>, Weight), DispatchError> {
         if !Self::can_exchange(dex_id, input_asset_id, output_asset_id) {
             fail!(Error::<T>::CantExchange);
         }
@@ -1574,8 +1583,14 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
             Self::decide_buy_amounts(&output_asset_id, &input_asset_id, amount, deduce_fee)?
         };
         match amount {
-            QuoteAmount::WithDesiredInput { .. } => Ok(SwapOutcome::new(output_amount, fee_amount)),
-            QuoteAmount::WithDesiredOutput { .. } => Ok(SwapOutcome::new(input_amount, fee_amount)),
+            QuoteAmount::WithDesiredInput { .. } => Ok((
+                SwapOutcome::new(output_amount, fee_amount),
+                Self::quote_weight(),
+            )),
+            QuoteAmount::WithDesiredOutput { .. } => Ok((
+                SwapOutcome::new(input_amount, fee_amount),
+                Self::quote_weight(),
+            )),
         }
     }
 
@@ -1586,7 +1601,7 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
         input_asset_id: &T::AssetId,
         output_asset_id: &T::AssetId,
         desired_amount: SwapAmount<Balance>,
-    ) -> Result<SwapOutcome<Balance>, DispatchError> {
+    ) -> Result<(SwapOutcome<Balance>, Weight), DispatchError> {
         if !Self::can_exchange(dex_id, input_asset_id, output_asset_id) {
             fail!(Error::<T>::CantExchange);
         }
@@ -1607,7 +1622,7 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
                 receiver,
             );
             Pallet::<T>::update_collateral_reserves(output_asset_id, reserves_account_id)?;
-            outcome
+            outcome.map(|res| (res, Self::exchange_weight()))
         } else {
             let outcome = BuyMainAsset::<T>::new(
                 *input_asset_id,
@@ -1618,7 +1633,7 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
             )?
             .swap();
             Pallet::<T>::update_collateral_reserves(input_asset_id, reserves_account_id)?;
-            outcome
+            outcome.map(|res| (res, Self::exchange_weight()))
         }
     }
 
@@ -1628,12 +1643,15 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
         output_asset_id: &T::AssetId,
         input_amount: Balance,
         output_amount: Balance,
-    ) -> Result<Vec<(Balance, T::AssetId, RewardReason)>, DispatchError> {
+    ) -> Result<(Vec<(Balance, T::AssetId, RewardReason)>, Weight), DispatchError> {
         if !Self::can_exchange(dex_id, input_asset_id, output_asset_id) {
             fail!(Error::<T>::CantExchange);
         }
+        let mut weight = <T as Config>::WeightInfo::can_exchange();
+
         let base_asset_id = &T::GetBaseAssetId::get();
         if output_asset_id == base_asset_id {
+            weight = Self::check_rewards_weight();
             let reserves_tech_account_id = ReservesAcc::<T>::get();
             let reserves_account_id =
                 Technical::<T>::tech_account_id_to_account_id(&reserves_tech_account_id)?;
@@ -1650,12 +1668,15 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
                     .map_err(|_| Error::<T>::PriceCalculationFailed)?;
             }
             if !pswap_amount.is_zero() {
-                Ok([(pswap_amount, PSWAP.into(), RewardReason::BuyOnBondingCurve)].into())
+                Ok((
+                    [(pswap_amount, PSWAP.into(), RewardReason::BuyOnBondingCurve)].into(),
+                    weight,
+                ))
             } else {
-                Ok(Vec::new())
+                Ok((Vec::new(), weight))
             }
         } else {
-            Ok(Vec::new()) // no rewards on sell
+            Ok((Vec::new(), weight)) // no rewards on sell
         }
     }
 
@@ -1749,6 +1770,18 @@ impl<T: Config> LiquiditySource<T::DEXId, T::AccountId, T::AssetId, Balance, Dis
             }
         };
         Ok(outcome)
+    }
+
+    fn quote_weight() -> Weight {
+        <T as Config>::WeightInfo::quote()
+    }
+
+    fn exchange_weight() -> Weight {
+        <T as Config>::WeightInfo::exchange()
+    }
+
+    fn check_rewards_weight() -> Weight {
+        <T as Config>::WeightInfo::check_rewards()
     }
 }
 

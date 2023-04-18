@@ -214,6 +214,11 @@ pub fn run() -> sc_cli::Result<()> {
         }
         #[cfg(feature = "try-runtime")]
         Some(Subcommand::TryRuntime(cmd)) => {
+            use sc_executor::{sp_wasm_interface::ExtendedHostFunctions, NativeExecutionDispatch};
+            type HostFunctionsOf<E> = ExtendedHostFunctions<
+                sp_io::SubstrateHostFunctions,
+                <E as NativeExecutionDispatch>::ExtendHostFunctions,
+            >;
             let runner = cli.create_runner(cmd)?;
             set_default_ss58_version();
 
@@ -226,9 +231,9 @@ pub fn run() -> sc_cli::Result<()> {
             let task_manager = TaskManager::new(runner.config().tokio_handle.clone(), *registry)
                 .map_err(|e| sc_cli::Error::Service(sc_service::Error::Prometheus(e)))?;
 
-            runner.async_run(|config| {
+            runner.async_run(|_config| {
                 Ok((
-                    cmd.run::<framenode_runtime::Block, service::ExecutorDispatch>(config),
+                    cmd.run::<framenode_runtime::Block, HostFunctionsOf<service::ExecutorDispatch>>(),
                     task_manager,
                 ))
             })
@@ -253,7 +258,14 @@ pub fn run() -> sc_cli::Result<()> {
             let runner = cli.create_runner(&cli.run)?;
             set_default_ss58_version();
             runner.run_node_until_exit(|config| async move {
-                service::new_full(config, cli.disable_beefy, None).map_err(sc_cli::Error::Service)
+                #[cfg(feature = "wip")] // Bridges
+                return service::new_full(config, cli.disable_beefy, None)
+                    .map_err(sc_cli::Error::Service);
+                // Disable BEEFY on production.
+                // BEEFY is still work in progress and probably will contain breaking changes, so it's better to enable it when it's ready
+                // Also before enabling it we need to ensure that validators updated their session keys
+                #[cfg(not(feature = "wip"))] // Bridges
+                service::new_full(config, true, None).map_err(sc_cli::Error::Service)
             })
         }
     }

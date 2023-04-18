@@ -338,6 +338,7 @@ pub fn new_partial(
     let rpc_extensions_builder = {
         let client = client.clone();
         let pool = transaction_pool.clone();
+        #[cfg(feature = "wip")]
         let backend = backend.clone();
 
         move |deny_unsafe,
@@ -354,7 +355,15 @@ pub fn new_partial(
                 },
             };
 
-            crate::rpc::create_full(deps, backend.clone()).map_err(Into::into)
+            let rpc = crate::rpc::create_full(deps)?;
+
+            #[cfg(feature = "wip")]
+            let rpc = crate::rpc::add_wip_rpc(rpc, backend.clone(), client.clone())?;
+
+            #[cfg(feature = "ready-to-test")]
+            let rpc = crate::rpc::add_ready_for_test_rpc(rpc)?;
+
+            Ok(rpc)
         }
     };
 
@@ -473,6 +482,7 @@ pub fn new_full(
         .expect("failed to build offchain workers");
     }
 
+    let is_offchain_indexing_enabled = config.offchain_worker.indexing_enabled;
     let role = config.role.clone();
     let force_authoring = config.force_authoring;
     let name = config.network.node_name.clone();
@@ -566,7 +576,7 @@ pub fn new_full(
             justifications_protocol_name,
             _phantom: core::marker::PhantomData::<Block>,
         };
-        let payload_provider = beefy_primitives::mmr::MmrRootProvider::new(client.clone());
+        let payload_provider = sp_beefy::mmr::MmrRootProvider::new(client.clone());
         let beefy_params = beefy_gadget::BeefyParams {
             client: client.clone(),
             backend: backend.clone(),
@@ -585,6 +595,18 @@ pub fn new_full(
         task_manager
             .spawn_essential_handle() // FIXME: use `spawn_handle` in non-test case
             .spawn_blocking("beefy-gadget", Some("beefy-gadget"), gadget);
+
+        if is_offchain_indexing_enabled {
+            task_manager.spawn_handle().spawn_blocking(
+                "mmr-gadget",
+                None,
+                mmr_gadget::MmrGadget::start(
+                    client.clone(),
+                    backend.clone(),
+                    sp_mmr_primitives::INDEXING_PREFIX.to_vec(),
+                ),
+            );
+        }
     }
 
     let grandpa_config = sc_finality_grandpa::Config {

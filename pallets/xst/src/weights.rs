@@ -35,31 +35,55 @@ use sp_std::marker::PhantomData;
 /// Weight functions for `xst`.
 pub struct WeightInfo<T>(PhantomData<T>);
 impl<T: frame_system::Config> crate::WeightInfo for WeightInfo<T> {
-    fn initialize_pool() -> Weight {
-        Weight::zero()
-    }
     fn set_reference_asset() -> Weight {
         Weight::zero()
     }
     fn enable_synthetic_asset() -> Weight {
         Weight::zero()
     }
+    fn disable_synthetic_asset() -> Weight {
+        Weight::zero()
+    }
+    fn register_synthetic_asset() -> Weight {
+        Weight::zero()
+    }
+    fn set_synthetic_asset_fee() -> Weight {
+        Weight::zero()
+    }
     fn set_synthetic_base_asset_floor_price() -> Weight {
+        Weight::zero()
+    }
+    fn quote() -> Weight {
+        Weight::zero()
+    }
+    fn exchange() -> Weight {
         Weight::zero()
     }
 }
 
 impl crate::WeightInfo for () {
-    fn initialize_pool() -> Weight {
-        EXTRINSIC_FIXED_WEIGHT
-    }
     fn set_reference_asset() -> Weight {
         EXTRINSIC_FIXED_WEIGHT
     }
     fn enable_synthetic_asset() -> Weight {
         EXTRINSIC_FIXED_WEIGHT
     }
+    fn disable_synthetic_asset() -> Weight {
+        EXTRINSIC_FIXED_WEIGHT
+    }
+    fn register_synthetic_asset() -> Weight {
+        EXTRINSIC_FIXED_WEIGHT
+    }
+    fn set_synthetic_asset_fee() -> Weight {
+        EXTRINSIC_FIXED_WEIGHT
+    }
     fn set_synthetic_base_asset_floor_price() -> Weight {
+        EXTRINSIC_FIXED_WEIGHT
+    }
+    fn quote() -> Weight {
+        EXTRINSIC_FIXED_WEIGHT
+    }
+    fn exchange() -> Weight {
         EXTRINSIC_FIXED_WEIGHT
     }
 }

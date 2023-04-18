@@ -30,17 +30,25 @@
 
 use core::marker::PhantomData;
 
+#[cfg(feature = "wip")]
 use bridge_types::traits::BridgeAssetRegistry;
+#[cfg(feature = "wip")]
 use codec::{Decode, Encode};
-use frame_support::dispatch::Dispatchable;
-use frame_support::dispatch::{DispatchClass, DispatchInfo, PostDispatchInfo};
-use frame_support::traits::{Contains, Currency, OnUnbalanced};
+use frame_support::dispatch::DispatchClass;
+use frame_support::traits::{Currency, OnUnbalanced};
 use frame_support::weights::constants::BlockExecutionWeight;
 use frame_support::weights::Weight;
-use frame_support::RuntimeDebug;
+#[cfg(feature = "wip")]
+use frame_support::{
+    dispatch::{DispatchInfo, Dispatchable, PostDispatchInfo},
+    traits::Contains,
+    RuntimeDebug,
+};
 
 pub use common::weights::{BlockLength, BlockWeights, TransactionByteFee};
+#[cfg(feature = "wip")]
 use scale_info::TypeInfo;
+#[cfg(feature = "wip")]
 use sp_runtime::DispatchError;
 
 pub type NegativeImbalanceOf<T> = <<T as pallet_staking::Config>::Currency as Currency<
@@ -66,7 +74,7 @@ impl pallet_preimage::WeightInfo for PreimageWeightInfo {
             .max_extrinsic
             .expect("Democracy pallet must have max extrinsic weight");
         if bytes > MAX_PREIMAGE_BYTES {
-            return max_weight.saturating_add(Weight::from_ref_time(1));
+            return max_weight.saturating_add(Weight::from_parts(1, 0));
         }
         let weight = <() as pallet_preimage::WeightInfo>::note_preimage(bytes);
         let max_dispatch_weight: Weight = max_weight.saturating_sub(BlockExecutionWeight::get());
@@ -145,7 +153,7 @@ impl<T: frame_system::Config> pallet_collective::WeightInfo for CollectiveWeight
             .max_extrinsic
             .expect("Collective pallet must have max extrinsic weight");
         if bytes > MAX_PREIMAGE_BYTES {
-            return max_weight.saturating_add(Weight::from_ref_time(1));
+            return max_weight.saturating_add(Weight::from_parts(1, 0));
         }
         let weight = <() as pallet_collective::WeightInfo>::close_early_approved(bytes, m, p);
         let max_dispatch_weight: Weight = max_weight.saturating_sub(BlockExecutionWeight::get());
@@ -162,7 +170,7 @@ impl<T: frame_system::Config> pallet_collective::WeightInfo for CollectiveWeight
             .max_extrinsic
             .expect("Collective pallet must have max extrinsic weight");
         if bytes > MAX_PREIMAGE_BYTES {
-            return max_weight.saturating_add(Weight::from_ref_time(1));
+            return max_weight.saturating_add(Weight::from_parts(1, 0));
         }
         let weight = <() as pallet_collective::WeightInfo>::close_approved(bytes, m, p);
         let max_dispatch_weight: Weight = max_weight.saturating_sub(BlockExecutionWeight::get());
@@ -252,6 +260,7 @@ impl<T: frame_system::Config + pallet_staking::Config> OnUnbalanced<NegativeImba
     fn on_nonzero_unbalanced(_amount: NegativeImbalanceOf<T>) {}
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
 pub struct DispatchableSubstrateBridgeCall(
     bridge_types::substrate::SubstrateBridgeMessage<
@@ -261,6 +270,7 @@ pub struct DispatchableSubstrateBridgeCall(
     >,
 );
 
+#[cfg(feature = "wip")] // Substrate bridge
 impl Dispatchable for DispatchableSubstrateBridgeCall {
     type RuntimeOrigin = crate::RuntimeOrigin;
     type Config = crate::Runtime;
@@ -285,8 +295,10 @@ impl Dispatchable for DispatchableSubstrateBridgeCall {
     }
 }
 
+#[cfg(feature = "wip")] // Bridges
 pub struct BridgeAssetRegistryImpl;
 
+#[cfg(feature = "wip")] // Bridges
 impl BridgeAssetRegistry<crate::AccountId, crate::AssetId> for BridgeAssetRegistryImpl {
     type AssetName = crate::AssetName;
     type AssetSymbol = crate::AssetSymbol;
@@ -304,12 +316,28 @@ impl BridgeAssetRegistry<crate::AccountId, crate::AssetId> for BridgeAssetRegist
     }
 }
 
+#[cfg(feature = "wip")] // Substrate bridge
 pub struct SubstrateBridgeCallFilter;
+
+#[cfg(feature = "wip")] // Substrate bridge
 impl Contains<DispatchableSubstrateBridgeCall> for SubstrateBridgeCallFilter {
     fn contains(call: &DispatchableSubstrateBridgeCall) -> bool {
         match &call.0 {
             bridge_types::substrate::SubstrateBridgeMessage::SubstrateApp(_) => true,
             bridge_types::substrate::SubstrateBridgeMessage::XCMApp(_) => false,
+        }
+    }
+}
+
+#[cfg(feature = "wip")] // EVM bridge
+pub struct EVMBridgeCallFilter;
+
+#[cfg(feature = "wip")] // EVM bridge
+impl Contains<crate::RuntimeCall> for EVMBridgeCallFilter {
+    fn contains(call: &crate::RuntimeCall) -> bool {
+        match call {
+            crate::RuntimeCall::ERC20App(_) | crate::RuntimeCall::EthApp(_) => true,
+            _ => false,
         }
     }
 }
@@ -321,7 +349,7 @@ mod test {
     use frame_support::weights::Weight;
     use pallet_preimage::WeightInfo;
 
-    const MAX_WEIGHT: Weight = Weight::from_ref_time(1_459_875_000_000_u64);
+    const MAX_WEIGHT: Weight = Weight::from_parts(1_459_875_000_000_u64, 0);
     const MEBIBYTE: u32 = 1024 * 1024;
 
     #[test]
@@ -332,13 +360,13 @@ mod test {
             assert!(actual.ref_time() <= MAX_WEIGHT.ref_time(), "{}", name);
         }
 
-        t(u32::MIN, Weight::from_ref_time(257_591_000), "u32::MIN");
-        t(1, Weight::from_ref_time(257_592_680), "1");
-        t(500_000, Weight::from_ref_time(1_097_591_000), "500_000");
-        t(1_000_000, Weight::from_ref_time(1_937_591_000), "1_000_000");
+        t(u32::MIN, Weight::from_parts(248_828_000, 0), "u32::MIN");
+        t(1, Weight::from_parts(248_829_705, 0), "1");
+        t(500_000, Weight::from_parts(1_101_328_000, 0), "500_000");
+        t(1_000_000, Weight::from_parts(1_953_828_000, 0), "1_000_000");
         t(
             5 * MEBIBYTE,
-            Weight::from_ref_time(9_065_629_400),
+            Weight::from_parts(9_187_938_400, 0),
             "5 * MEBIBYTE",
         );
     }
@@ -347,7 +375,7 @@ mod test {
     fn democracy_weight_info_should_overweight_for_huge_preimages() {
         fn t(bytes: u32) {
             let actual = PreimageWeightInfo::note_preimage(bytes);
-            assert_eq!(actual.ref_time(), 1_459_913_702_001_u64);
+            assert_eq!(actual.ref_time(), 1_459_900_160_001_u64);
             assert!(actual.ref_time() > MAX_WEIGHT.ref_time());
         }
 

@@ -33,7 +33,7 @@ use common::mock::ExistentialDeposits;
 use common::prelude::Balance;
 use common::{
     balance, fixed, hash, AssetName, AssetSymbol, DEXInfo, Fixed, DEFAULT_BALANCE_PRECISION, DOT,
-    PSWAP, VAL, XOR, XST,
+    PSWAP, VAL, XOR, XST, XSTUSD,
 };
 use currencies::BasicCurrencyAdapter;
 use frame_support::traits::{Everything, GenesisBuild, OnFinalize, OnInitialize, PrivilegeCmp};
@@ -102,10 +102,11 @@ pub fn FERDIE() -> AccountId {
 }
 
 pub const DEX_A_ID: DEXId = 0;
+pub const DEX_B_ID: DEXId = 1;
 
 parameter_types! {
     pub const BlockHashCount: u64 = 250;
-    pub const MaximumBlockWeight: Weight = Weight::from_ref_time(1024);
+    pub const MaximumBlockWeight: Weight = Weight::from_parts(1024, 0);
     pub const MaximumBlockLength: u32 = 2 * 1024;
     pub const AvailableBlockRatio: Perbill = Perbill::from_percent(75);
     pub const GetBaseAssetId: AssetId = common::AssetId32 { code: [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], phantom: PhantomData };
@@ -121,7 +122,7 @@ parameter_types! {
     pub GetBondingCurveRewardsAccountId: AccountId = AccountId32::from([13; 32]);
     pub GetFarmingRewardsAccountId: AccountId = AccountId32::from([14; 32]);
     pub GetCrowdloanRewardsAccountId: AccountId = AccountId32::from([15; 32]);
-    pub const SchedulerMaxWeight: Weight = Weight::from_ref_time(1024);
+    pub const SchedulerMaxWeight: Weight = Weight::from_parts(1024, 0);
     pub const MinimumPeriod: u64 = 5;
 }
 
@@ -215,15 +216,10 @@ impl tokens::Config for Runtime {
     type CurrencyId = <Runtime as assets::Config>::AssetId;
     type WeightInfo = ();
     type ExistentialDeposits = ExistentialDeposits;
-    type OnDust = ();
-    type OnSlash = ();
-    type OnDeposit = ();
-    type OnTransfer = ();
+    type CurrencyHooks = ();
     type MaxLocks = ();
     type MaxReserves = ();
     type ReserveIdentifier = ();
-    type OnNewTokenAccount = ();
-    type OnKilledTokenAccount = ();
     type DustRemovalWhitelist = Everything;
 }
 
@@ -243,6 +239,7 @@ parameter_types! {
             "0000000000000000000000000000000000000000000000000000000000000023"
     ));
     pub const GetBuyBackDexId: DEXId = 0;
+    pub GetTBCBuyBackXSTPercent: Fixed = fixed!(0.025);
 }
 
 impl assets::Config for Runtime {
@@ -299,6 +296,7 @@ impl pswap_distribution::Config for Runtime {
     const PSWAP_BURN_PERCENT: Percent = Percent::from_percent(3);
     type RuntimeEvent = RuntimeEvent;
     type GetIncentiveAssetId = GetIncentiveAssetId;
+    type GetXSTAssetId = GetBuyBackAssetId;
     type LiquidityProxy = ();
     type CompatBalance = Balance;
     type GetDefaultSubscriptionFrequency = GetDefaultSubscriptionFrequency;
@@ -309,6 +307,7 @@ impl pswap_distribution::Config for Runtime {
     type WeightInfo = ();
     type GetParliamentAccountId = GetParliamentAccountId;
     type PoolXykPallet = PoolXYK;
+    type BuyBackHandler = ();
 }
 
 impl multicollateral_bonding_curve_pool::Config for Runtime {
@@ -318,15 +317,17 @@ impl multicollateral_bonding_curve_pool::Config for Runtime {
     type EnsureDEXManager = dex_manager::Pallet<Runtime>;
     type PriceToolsPallet = ();
     type VestedRewardsPallet = VestedRewards;
+    type BuyBackHandler = ();
+    type BuyBackXSTPercent = GetTBCBuyBackXSTPercent;
     type WeightInfo = ();
 }
 
 impl vested_rewards::Config for Runtime {
+    const BLOCKS_PER_DAY: BlockNumberFor<Self> = BLOCKS_PER_DAY;
     type RuntimeEvent = RuntimeEvent;
     type GetMarketMakerRewardsAccountId = GetMarketMakerRewardsAccountId;
     type GetBondingCurveRewardsAccountId = GetBondingCurveRewardsAccountId;
     type GetFarmingRewardsAccountId = GetFarmingRewardsAccountId;
-    type GetCrowdloanRewardsAccountId = GetCrowdloanRewardsAccountId;
     type WeightInfo = ();
 }
 
@@ -407,28 +408,32 @@ impl Default for ExtBuilder {
             CLAIM_FROM_FARM,
         ];
         Self {
-            initial_dex_list: vec![(
-                DEX_A_ID,
-                DEXInfo {
-                    base_asset_id: XOR,
-                    synthetic_base_asset_id: XST,
-                    is_public: true,
-                },
-            )],
-            endowed_accounts: vec![
-                (ALICE(), DOT, balance!(2000000)),
-                (ALICE(), PSWAP, balance!(2000000)),
-                (BOB(), DOT, balance!(2000000)),
-                (BOB(), PSWAP, balance!(2000000)),
-                (CHARLIE(), DOT, balance!(2000000)),
-                (CHARLIE(), PSWAP, balance!(2000000)),
-                (DAVE(), DOT, balance!(2000000)),
-                (DAVE(), PSWAP, balance!(2000000)),
-                (EVE(), DOT, balance!(2000000)),
-                (EVE(), PSWAP, balance!(2000000)),
-                (FERDIE(), DOT, balance!(2000000)),
-                (FERDIE(), PSWAP, balance!(2000000)),
+            initial_dex_list: vec![
+                (
+                    DEX_A_ID,
+                    DEXInfo {
+                        base_asset_id: XOR,
+                        synthetic_base_asset_id: XST,
+                        is_public: true,
+                    },
+                ),
+                (
+                    DEX_B_ID,
+                    DEXInfo {
+                        base_asset_id: XSTUSD,
+                        synthetic_base_asset_id: XST,
+                        is_public: true,
+                    },
+                ),
             ],
+            endowed_accounts: [DOT, PSWAP, VAL, XSTUSD]
+                .into_iter()
+                .flat_map(|asset| {
+                    [ALICE(), BOB(), CHARLIE(), DAVE(), EVE(), FERDIE()]
+                        .into_iter()
+                        .map(move |account| (account, asset, balance!(2000000)))
+                })
+                .collect(),
             initial_permission_owners: vec![
                 (MANAGE_DEX, Scope::Limited(hash(&DEX_A_ID)), vec![BOB()]),
                 (CREATE_FARM, Scope::Unlimited, vec![ALICE()]),
@@ -510,6 +515,28 @@ impl ExtBuilder {
                     ALICE(),
                     AssetSymbol(b"PSWAP".to_vec()),
                     AssetName(b"PSWAP".to_vec()),
+                    DEFAULT_BALANCE_PRECISION,
+                    0,
+                    true,
+                    None,
+                    None,
+                ),
+                (
+                    VAL.into(),
+                    ALICE(),
+                    AssetSymbol(b"VAL".to_vec()),
+                    AssetName(b"VAL".to_vec()),
+                    DEFAULT_BALANCE_PRECISION,
+                    0,
+                    true,
+                    None,
+                    None,
+                ),
+                (
+                    XSTUSD.into(),
+                    ALICE(),
+                    AssetSymbol(b"XSTUSD".to_vec()),
+                    AssetName(b"XSTUSD".to_vec()),
                     DEFAULT_BALANCE_PRECISION,
                     0,
                     true,

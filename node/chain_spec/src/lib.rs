@@ -49,15 +49,18 @@ use framenode_runtime::multicollateral_bonding_curve_pool::{
 use framenode_runtime::opaque::SessionKeys;
 use framenode_runtime::{
     assets, eth_bridge, frame_system, AccountId, AssetId, AssetName, AssetSymbol, AssetsConfig,
-    BabeConfig, BalancesConfig, BeefyConfig, BeefyId, BridgeInboundChannelConfig,
-    BridgeMultisigConfig, BridgeOutboundChannelConfig, CouncilConfig, CrowdloanReward,
+    BabeConfig, BalancesConfig, BeefyConfig, BeefyId, BridgeMultisigConfig, CouncilConfig,
     DEXAPIConfig, DEXManagerConfig, DemocracyConfig, EthBridgeConfig, EthereumHeader,
-    EthereumLightClientConfig, GenesisConfig, GetBaseAssetId, GetParliamentAccountId,
-    GetPswapAssetId, GetSyntheticBaseAssetId, GetValAssetId, GetXorAssetId, GrandpaConfig,
-    ImOnlineId, IrohaMigrationConfig, LiquiditySourceType, MulticollateralBondingCurvePoolConfig,
+    GenesisConfig, GetBaseAssetId, GetParliamentAccountId, GetPswapAssetId,
+    GetSyntheticBaseAssetId, GetValAssetId, GetXorAssetId, GrandpaConfig, ImOnlineId,
+    IrohaMigrationConfig, LiquiditySourceType, MulticollateralBondingCurvePoolConfig,
     PermissionsConfig, PswapDistributionConfig, RewardsConfig, Runtime, SS58Prefix, SessionConfig,
     Signature, StakerStatus, StakingConfig, SystemConfig, TechAccountId, TechnicalCommitteeConfig,
     TechnicalConfig, TokensConfig, TradingPair, TradingPairConfig, XSTPoolConfig, WASM_BINARY,
+};
+#[cfg(feature = "wip")]
+use framenode_runtime::{
+    BridgeInboundChannelConfig, BridgeOutboundChannelConfig, EthereumLightClientConfig,
 };
 
 use hex_literal::hex;
@@ -77,7 +80,7 @@ use std::str::FromStr;
 use codec::Encode;
 use framenode_runtime::assets::{AssetRecord, AssetRecordArg};
 #[cfg(feature = "private-net")]
-use framenode_runtime::{FaucetConfig, SudoConfig, VestedRewardsConfig};
+use framenode_runtime::{FaucetConfig, SudoConfig};
 use sp_core::{sr25519, Pair};
 use sp_runtime::traits::{IdentifyAccount, Verify};
 use std::borrow::Cow;
@@ -262,19 +265,21 @@ pub fn dev_net_coded() -> ChainSpec {
                     hex!("e813415062749d4bbea338d8a69b9cc5be02af0fdf8c96ba2d50733aaf32cb50").into(),
                     hex!("e08d567d824152adcf53b8dca949756be895b6b8bebb5f9fa55959e9473e0c7f").into(),
                     hex!("92c4ff71ae7492a1e6fef5d80546ea16307c560ac1063ffaa5e0e084df1e2b7e").into(),
+                    hex!("328be9c672c4fff8ae9065ebdf116a47e1121933616a1d1749ff9bb3356fd542").into(),
                 ],
                 vec![
                     hex!("da96bc5065020df6d5ccc9659ae3007ddc04a6fd7f52cabe76e87b6219026b65").into(),
                     hex!("f57efdde92d350999cb41d1f2b21255d9ba7ae70cf03538ddee42a38f48a5436").into(),
+                    hex!("aa79aa80b94b1cfba69c4a7d60eeb7b469e6411d1f686cc61de8adc8b1b76a69").into(),
                 ],
                 EthBridgeParams {
-                    xor_master_contract_address: hex!("12c6a709925783f49fcca0b398d13b0d597e6e1c")
+                    xor_master_contract_address: hex!("7F62CCd5566c64cfb785f73B3c19653D93e5414c")
                         .into(),
-                    xor_contract_address: hex!("02ffdae478412dbde6bbd5cda8ff05c0960e0c45").into(),
-                    val_master_contract_address: hex!("47e229aa491763038f6a505b4f85d8eb463f0962")
+                    xor_contract_address: hex!("2F4e425760546600B73D7bD66C80d45c77D1135b").into(),
+                    val_master_contract_address: hex!("e2C58207Cc6dF5565044eccffdf7aeb2DAe89647")
                         .into(),
-                    val_contract_address: hex!("68339de68c9af6577c54867728dbb2db9d7368bf").into(),
-                    bridge_contract_address: hex!("24390c8f6cbd5d152c30226f809f4e3f153b88d4")
+                    val_contract_address: hex!("46d22744E171969f9D32C75E4c192aF79e3bb70E").into(),
+                    bridge_contract_address: hex!("401c6A23a44f72151D90878DF0aa86E77fBde0e2")
                         .into(),
                 },
                 vec![
@@ -688,10 +693,6 @@ fn bonding_curve_distribution_accounts(
         )),
         projects_stores_and_shops_coeff.get().unwrap(),
     );
-    let parliament_and_development = DistributionAccountData::new(
-        DistributionAccount::Account(GetParliamentAccountId::get()),
-        projects_parliament_and_development_coeff.get().unwrap(),
-    );
     let projects = DistributionAccountData::new(
         DistributionAccount::TechAccount(TechAccountId::Pure(
             DEXId::Polkaswap.into(),
@@ -710,7 +711,6 @@ fn bonding_curve_distribution_accounts(
         xor_allocation,
         sora_citizens,
         stores_and_shops,
-        parliament_and_development,
         projects,
         val_holders,
     }
@@ -824,6 +824,7 @@ fn testnet_genesis(
     validator_count: u32,
 ) -> GenesisConfig {
     use common::XSTUSD;
+    #[cfg(feature = "wip")]
     use framenode_runtime::EthAppConfig;
 
     // Initial balances
@@ -1144,20 +1145,29 @@ fn testnet_genesis(
         XST.into(),
         TBCD.into(),
     ];
-    let initial_synthetic_assets = vec![XSTUSD.into()];
     GenesisConfig {
+        #[cfg(feature = "wip")] // Substrate bridge
         beefy_light_client: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_app: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_inbound_channel: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_outbound_channel: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         migration_app: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         erc20_app: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         eth_app: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         ethereum_light_client: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         bridge_inbound_channel: BridgeInboundChannelConfig {
             reward_fraction: Perbill::from_percent(80),
             ..Default::default()
         },
+        #[cfg(feature = "wip")] // EVM bridge
         bridge_outbound_channel: BridgeOutboundChannelConfig {
             fee: 10000,
             interval: 10,
@@ -1307,17 +1317,6 @@ fn testnet_genesis(
                     None,
                 ),
                 (
-                    XSTUSD.into(),
-                    assets_and_permissions_account_id.clone(),
-                    AssetSymbol(b"XSTUSD".to_vec()),
-                    AssetName(b"SORA Synthetic USD".to_vec()),
-                    DEFAULT_BALANCE_PRECISION,
-                    Balance::zero(),
-                    true,
-                    None,
-                    None,
-                ),
-                (
                     common::AssetId32::from_bytes(hex!(
                         "008bcfd2387d3fc453333557eecb0efe59fcba128769b2feefdd306e98e66440"
                     ))
@@ -1337,6 +1336,17 @@ fn testnet_genesis(
                     AssetSymbol(b"HMX".to_vec()),
                     AssetName(b"Hermes".to_vec()),
                     18,
+                    Balance::zero(),
+                    true,
+                    None,
+                    None,
+                ),
+                (
+                    XSTUSD,
+                    assets_and_permissions_account_id.clone(),
+                    AssetSymbol(b"XSTUSD".to_vec()),
+                    AssetName(b"SORA Synthetics USD".to_vec()),
+                    DEFAULT_BALANCE_PRECISION,
                     Balance::zero(),
                     true,
                     None,
@@ -1446,12 +1456,6 @@ fn testnet_genesis(
                 .iter()
                 .cloned()
                 .map(|target_asset_id| create_trading_pair(XOR, target_asset_id))
-                .chain(
-                    initial_synthetic_assets
-                        .iter()
-                        .cloned()
-                        .map(|target_asset_id| create_trading_pair(XST, target_asset_id)),
-                )
                 .collect(),
         },
         dexapi: DEXAPIConfig {
@@ -1482,7 +1486,7 @@ fn testnet_genesis(
                     },
                     AssetConfig::Sidechain {
                         id: DAI.into(),
-                        sidechain_id: hex!("5592ec0cfb4dbc12d3ab100b257153436a1f0fea").into(),
+                        sidechain_id: hex!("34273F3a534dF490437F0deFFcb0549B40fb3Db6").into(),
                         owned: false,
                         precision: DEFAULT_BALANCE_PRECISION,
                     },
@@ -1536,42 +1540,15 @@ fn testnet_genesis(
         technical_membership: Default::default(),
         im_online: Default::default(),
         xst_pool: XSTPoolConfig {
-            tech_account_id: xst_pool_permissioned_tech_account_id, // TODO: move to defaults
             reference_asset_id: DAI,
-            initial_synthetic_assets: vec![XSTUSD],
+            initial_synthetic_assets: vec![(
+                XSTUSD.into(),
+                common::SymbolName::usd().into(),
+                fixed!(0.00666),
+            )],
         },
         beefy: BeefyConfig {
             authorities: vec![],
-        },
-        vested_rewards: VestedRewardsConfig {
-            test_crowdloan_rewards: vec![
-                CrowdloanReward {
-                    id: Vec::new(),
-                    address: hex!(
-                        "f88629a067c975e17f9675ee57f011b3b1273b20768b81b097242e8581777c72"
-                    )
-                    .to_vec(),
-                    contribution: fixed!(0.0),
-                    xor_reward: fixed!(1.2),
-                    pswap_reward: fixed!(2.3),
-                    val_reward: fixed!(3.4),
-                    xstusd_reward: fixed!(4.5),
-                    percent: fixed!(5.6),
-                },
-                CrowdloanReward {
-                    id: Vec::new(),
-                    address: hex!(
-                        "f230e5df6850af42da63b271202cad2afe5deee8de8791c91157b353c3c1900c"
-                    )
-                    .to_vec(),
-                    contribution: fixed!(0.0),
-                    xor_reward: fixed!(2.3),
-                    pswap_reward: fixed!(3.4),
-                    val_reward: fixed!(4.5),
-                    xstusd_reward: fixed!(5.6),
-                    percent: fixed!(6.7),
-                },
-            ],
         },
     }
 }
@@ -1580,7 +1557,9 @@ fn testnet_genesis(
     any(
         feature = "main-net-coded",
         feature = "test",
-        feature = "runtime-benchmarks"
+        feature = "runtime-benchmarks",
+        feature = "wip",
+        feature = "ready-to-test"
     ),
     not(feature = "private-net")
 ))]
@@ -1680,7 +1659,9 @@ pub fn main_net_coded() -> ChainSpec {
     any(
         feature = "main-net-coded",
         feature = "test",
-        feature = "runtime-benchmarks"
+        feature = "runtime-benchmarks",
+        feature = "wip",
+        feature = "ready-to-test"
     ),
     not(feature = "private-net")
 ))]
@@ -1771,6 +1752,8 @@ fn mainnet_genesis(
 
     let xst_pool_permissioned_tech_account_id =
         framenode_runtime::GetXSTPoolPermissionedTechAccountId::get();
+    let xst_pool_permissioned_account_id =
+        framenode_runtime::GetXSTPoolPermissionedAccountId::get();
 
     let market_maker_rewards_tech_account_id =
         framenode_runtime::GetMarketMakerRewardsTechAccountId::get();
@@ -1849,6 +1832,10 @@ fn mainnet_genesis(
             mbc_pool_free_reserves_tech_account_id.clone(),
         ),
         (
+            xst_pool_permissioned_account_id.clone(),
+            xst_pool_permissioned_tech_account_id.clone(),
+        ),
+        (
             iroha_migration_account_id.clone(),
             iroha_migration_tech_account_id.clone(),
         ),
@@ -1882,7 +1869,6 @@ fn mainnet_genesis(
         umi_nfts: Vec::new(),
     };
     let initial_collateral_assets = vec![DAI.into(), VAL.into(), PSWAP.into(), ETH.into()];
-    let initial_synthetic_assets = vec![XSTUSD.into()];
     let mut bridge_assets = vec![
         AssetConfig::Sidechain {
             id: XOR.into(),
@@ -1971,17 +1957,6 @@ fn mainnet_genesis(
             None,
         ),
         (
-            XSTUSD.into(),
-            assets_and_permissions_account_id.clone(),
-            AssetSymbol(b"XSTUSD".to_vec()),
-            AssetName(b"SORA Synthetic USD".to_vec()),
-            DEFAULT_BALANCE_PRECISION,
-            Balance::zero(),
-            true,
-            None,
-            None,
-        ),
-        (
             common::AssetId32::from_bytes(hex!(
                 "008bcfd2387d3fc453333557eecb0efe59fcba128769b2feefdd306e98e66440"
             ))
@@ -1989,6 +1964,17 @@ fn mainnet_genesis(
             assets_and_permissions_account_id.clone(),
             AssetSymbol(b"CERES".to_vec()),
             AssetName(b"Ceres".to_vec()),
+            DEFAULT_BALANCE_PRECISION,
+            Balance::zero(),
+            true,
+            None,
+            None,
+        ),
+        (
+            XSTUSD.into(),
+            assets_and_permissions_account_id.clone(),
+            AssetSymbol(b"XSTUSD".to_vec()),
+            AssetName(b"SORA Synthetics USD".to_vec()),
             DEFAULT_BALANCE_PRECISION,
             Balance::zero(),
             true,
@@ -2018,19 +2004,28 @@ fn mainnet_genesis(
         )
     }));
     GenesisConfig {
+        #[cfg(feature = "wip")] // Substrate bridge
         beefy_light_client: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_app: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_inbound_channel: Default::default(),
+        #[cfg(feature = "wip")] // Substrate bridge
         substrate_bridge_outbound_channel: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         migration_app: Default::default(),
-        vested_rewards: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         erc20_app: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         eth_app: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         ethereum_light_client: Default::default(),
+        #[cfg(feature = "wip")] // EVM bridge
         bridge_inbound_channel: BridgeInboundChannelConfig {
             reward_fraction: Perbill::from_percent(80),
             ..Default::default()
         },
+        #[cfg(feature = "wip")] // EVM bridge
         bridge_outbound_channel: BridgeOutboundChannelConfig {
             fee: 10000,
             interval: 10,
@@ -2157,6 +2152,11 @@ fn mainnet_genesis(
                     Scope::Unlimited,
                     vec![permissions::MINT, permissions::BURN],
                 ),
+                (
+                    xst_pool_permissioned_account_id.clone(),
+                    Scope::Unlimited,
+                    vec![permissions::MINT, permissions::BURN],
+                ),
             ],
         },
         balances: BalancesConfig {
@@ -2173,6 +2173,7 @@ fn mainnet_genesis(
                 (mbc_pool_rewards_account_id.clone(), 0),
                 (mbc_pool_free_reserves_account_id.clone(), 0),
                 (market_maker_rewards_account_id.clone(), 0),
+                (xst_pool_permissioned_account_id.clone(), 0),
             ]
             .into_iter()
             .chain(
@@ -2252,12 +2253,6 @@ fn mainnet_genesis(
                 .iter()
                 .cloned()
                 .map(|target_asset_id| create_trading_pair(XOR.into(), target_asset_id))
-                .chain(
-                    initial_synthetic_assets
-                        .iter()
-                        .cloned()
-                        .map(|target_asset_id| create_trading_pair(XST.into(), target_asset_id)),
-                )
                 .collect(),
         },
         dexapi: DEXAPIConfig {
@@ -2319,9 +2314,12 @@ fn mainnet_genesis(
         technical_membership: Default::default(),
         im_online: Default::default(),
         xst_pool: XSTPoolConfig {
-            tech_account_id: xst_pool_permissioned_tech_account_id, // TODO: move to defaults
             reference_asset_id: DAI,
-            initial_synthetic_assets: vec![XSTUSD],
+            initial_synthetic_assets: vec![(
+                XSTUSD,
+                common::SymbolName::usd().into(),
+                fixed!(0.00666),
+            )],
         },
         beefy: BeefyConfig {
             authorities: vec![],
